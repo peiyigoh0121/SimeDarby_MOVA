@@ -3,14 +3,16 @@ import heroImg from './assets/hero.png'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import './App.css'
-import TiltMeter from './TiltMeter.jsx'
+import ReportForm from './ReportForm.jsx'
+import MotionLogger from './MotionLogger.jsx'
 
 function App() {
   const [count, setCount] = useState(0)
 
   return (
     <>
-      <TiltMeter />
+      <ReportForm />
+      <MotionLogger />
       <section id="center">
         <div className="hero">
           <img src={heroImg} className="base" width="170" height="179" alt="" />
