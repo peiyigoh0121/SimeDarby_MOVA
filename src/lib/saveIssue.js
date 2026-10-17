@@ -1,6 +1,5 @@
 import { getSupabaseClient } from './supabaseClient.js'
 
-// Save the photo first, then create the matching issue row.
 export async function saveIssue(report) {
   try {
     const supabase = getSupabaseClient()

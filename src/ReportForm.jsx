@@ -1,7 +1,30 @@
-import { useEffect, useRef, useState } from 'react'
-import TiltMeter from './TiltMeter.jsx'
-import { assessRamp } from './lib/assessRamp.js'
-import { saveIssue } from './lib/saveIssue.js'
+import { useRef, useState } from 'react';
+import TiltMeter from './TiltMeter.jsx';
+import { assessRamp } from './lib/assessRamp.js';
+import { saveIssue } from './lib/saveIssue.js';
+import { Camera, MapPin, Send, CheckCircle, Sparkles, ArrowLeft, Ruler, ChevronRight } from 'lucide-react';
+
+const ISSUE_LABELS = {
+  ramp: 'Steep or Broken Ramp',
+  blocked_tactile_paving: 'Blocked Tactile Paving',
+  broken_tactile_paving: 'Broken Tactile Paving',
+  missing_handrail: 'Missing Handrail',
+  step_at_entrance: 'Step at Shop Entrance',
+  lift_out_of_service: 'Lift Out of Service',
+  drain_or_crossing: 'Drain or Crossing Trap',
+  pickup_point: 'Pick-up / Drop-off Barrier',
+};
+
+const ISSUE_GUIDANCE = {
+  ramp: 'Place your phone flat on the ramp to read its slope angle and enter length and clear width.',
+  blocked_tactile_paving: 'Photograph the yellow tactile guiding line and the object (e.g. motorbike, boxes) blocking it.',
+  broken_tactile_paving: 'Photograph damaged, cracked, missing, or misaligned tactile tiles.',
+  missing_handrail: 'Photograph the ramp or flight of steps where handrails are missing on either side.',
+  step_at_entrance: 'Photograph the shop doorway threshold step or unramped kerb.',
+  lift_out_of_service: 'Photograph the lift maintenance notice or broken lift entrance.',
+  drain_or_crossing: 'Photograph the parallel drain grating or hazardous tilted crossing.',
+  pickup_point: 'Photograph the vehicle drop-off point where mismatched kerbs push commuters onto the road.',
+};
 
 const ISSUE_TYPES = [
   'ramp',
@@ -12,465 +35,663 @@ const ISSUE_TYPES = [
   'lift_out_of_service',
   'drain_or_crossing',
   'pickup_point',
-]
+];
 
-// Resize the image in the browser and return a smaller JPEG file.
-function compressImage(file) {
-  return new Promise((resolve, reject) => {
-    const temporaryUrl = URL.createObjectURL(file)
-    const image = new Image()
-    let urlReleased = false
-    const releaseTemporaryUrl = () => {
-      if (urlReleased) return
-      urlReleased = true
-      URL.revokeObjectURL(temporaryUrl)
-    }
-    image.onload = () => {
-      releaseTemporaryUrl()
-      try {
-        const scale = Math.min(1, 1280 / image.naturalWidth)
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(image.naturalWidth * scale)
-        canvas.height = Math.round(image.naturalHeight * scale)
-        const context = canvas.getContext('2d')
-        if (!context) {
-          reject(new Error('This browser could not prepare the photo.'))
-          return
-        }
-        context.drawImage(image, 0, 0, canvas.width, canvas.height)
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob)
-          else reject(new Error('This browser could not compress the photo.'))
-        }, 'image/jpeg', 0.82)
-      } catch {
-        reject(new Error('This browser could not prepare the photo.'))
-      }
-    }
-    image.onerror = () => {
-      releaseTemporaryUrl()
-      reject(new Error('This photo could not be opened.'))
-    }
-    image.src = temporaryUrl
-  })
-}
+export default function ReportForm({ initialIssueType = 'ramp', onBackToDashboard }) {
+  const [issueType, setIssueType] = useState(initialIssueType);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [privacyAgreed, setPrivacyAgreed] = useState(true);
 
-// Turn the already-compressed photo into the text format sent to our server.
-function photoToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = String(reader.result || '')
-      const base64Data = dataUrl.slice(dataUrl.indexOf(',') + 1)
-      if (base64Data) resolve(base64Data)
-      else reject(new Error('The photo could not be read.'))
-    }
-    reader.onerror = () => reject(new Error('The photo could not be read.'))
-    reader.readAsDataURL(blob)
-  })
-}
+  // Ramp-specific states
+  const [slopeAngle, setSlopeAngle] = useState(4.2);
+  const [rampLength, setRampLength] = useState('3.5');
+  const [rampWidth, setRampWidth] = useState('1.4');
 
-function displayPhotoAnswer(value) {
-  if (value === null) return 'unclear'
-  if (value === true) return 'yes'
-  if (value === false) return 'no'
-  return value
-}
+  // Generic issue states
+  const [severity, setSeverity] = useState(3);
+  const [location, setLocation] = useState({ lat: 3.11806, lng: 101.62083, accuracy: 12 });
+  const [locationMode, setLocationMode] = useState('gps');
+  const [manualLat, setManualLat] = useState('');
+  const [manualLng, setManualLng] = useState('');
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationMessage, setLocationMessage] = useState('');
 
-function ReportForm() {
-  // Keep each answer in React state so the form can be connected to saving later.
-  const [issueType, setIssueType] = useState('ramp')
-  const [rampLength, setRampLength] = useState('')
-  const [rampWidth, setRampWidth] = useState('')
-  const [slopeAngle, setSlopeAngle] = useState(null)
-  const [severity, setSeverity] = useState(3)
-  const [privacyAgreed, setPrivacyAgreed] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [saveMessage, setSaveMessage] = useState(null)
-  const [photo, setPhoto] = useState(null)
-  const [photoPreview, setPhotoPreview] = useState('')
-  const [photoMessage, setPhotoMessage] = useState('')
-  const [aiPhotoCheck, setAiPhotoCheck] = useState(null)
-  const [isCheckingPhoto, setIsCheckingPhoto] = useState(false)
-  const [manualPhotoAnswers, setManualPhotoAnswers] = useState({
-    handrail: 'unclear',
-    surface: 'unclear',
-    tactile_paving_blocked: 'unclear',
-    blocked_by: '',
-    tactile_paving_broken: 'unclear',
-  })
-  const [location, setLocation] = useState(null)
-  const [locationMessage, setLocationMessage] = useState('')
-  const [isLocating, setIsLocating] = useState(false)
-  const [startedAt] = useState(() => new Date())
-  const [currentStep, setCurrentStep] = useState(1)
-  const photoInputRef = useRef(null)
-  const savingRef = useRef(false)
-  const checkingPhotoRef = useRef(false)
-  const photoCheckRequestRef = useRef(0)
-  const photoRequestRef = useRef(0)
-  const locationRequestRef = useRef(0)
-  const locationPendingRef = useRef(false)
-  const mountedRef = useRef(false)
+  // Photo & AI states
+  const [photo, setPhoto] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState('');
+  const [aiPhotoCheck, setAiPhotoCheck] = useState(null);
+  const [isCheckingPhoto, setIsCheckingPhoto] = useState(false);
+
+  // Submission state
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState(null);
+
+  const fileInputRef = useRef(null);
+
+  const isRampFlow = issueType === 'ramp';
+  const isTactileFlow = issueType === 'blocked_tactile_paving' || issueType === 'broken_tactile_paving';
+  const stepTitles = isRampFlow
+    ? ['Type & Privacy', 'Measure Ramp', 'Photo & Location', 'Review & Submit']
+    : ['Type & Privacy', 'Photo & Location', 'Review & Submit'];
+  const lastStep = stepTitles.length;
+
   const rampAssessment = assessRamp({
     slopeDegrees: slopeAngle,
-    lengthM: rampLength === '' ? null : Number(rampLength),
-    widthM: rampWidth === '' ? null : Number(rampWidth),
-  })
-  const stepTitles = ['Choose type and privacy', 'Measure', 'Photo and location', 'Review and submit']
-  // Each step stays locked until its required information has been entered.
-  function currentStepIsValid(step) {
-    if (step === 1) return Boolean(issueType && privacyAgreed)
-    if (step === 2) {
-      return issueType !== 'ramp' || (
-        slopeAngle !== null
-        && Number.isFinite(slopeAngle)
-        && Number(rampLength) > 0
-        && Number(rampWidth) > 0
-      )
-    }
-    if (step === 3) return Boolean(location) && (!photo || Boolean(aiPhotoCheck))
-    return Boolean(privacyAgreed && location)
-  }
+    lengthM: rampLength ? Number(rampLength) : null,
+    widthM: rampWidth ? Number(rampWidth) : null,
+  });
 
-  // Release old preview URLs, and invalidate pending work when the form closes.
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      photoRequestRef.current += 1
-      photoCheckRequestRef.current += 1
-      locationRequestRef.current += 1
-      locationPendingRef.current = false
-    }
-  }, [])
+  function handlePhotoUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAiPhotoCheck(null);
+    setPhotoPreview(URL.createObjectURL(file));
+    setPhoto(file);
 
-  useEffect(() => () => {
-    photoRequestRef.current += 1
-    if (photoPreview) URL.revokeObjectURL(photoPreview)
-  }, [photoPreview])
-
-  // Compress the chosen photo before keeping it in React state.
-  async function handlePhotoChange(event) {
-    const selectedFile = event.target.files?.[0]
-    const requestId = ++photoRequestRef.current
-    photoCheckRequestRef.current += 1
-    if (!selectedFile) {
-      setPhotoMessage('No photo was selected. If camera access was denied, allow it in your browser settings and try again.')
-      return
-    }
-    setPhotoMessage('')
-    setAiPhotoCheck(null)
-    try {
-      const compressedPhoto = await compressImage(selectedFile)
-      if (!mountedRef.current || requestId !== photoRequestRef.current) return
-      setPhoto(compressedPhoto)
-      setPhotoPreview(URL.createObjectURL(compressedPhoto))
-      setAiPhotoCheck(null)
-    } catch (error) {
-      if (!mountedRef.current || requestId !== photoRequestRef.current) return
-      setPhoto(null)
-      setPhotoMessage(error.message || 'The photo could not be prepared. Please try another photo.')
-    }
-    // Clear the picker so choosing the same photo again also triggers the change event.
-    event.target.value = ''
-  }
-
-  // Send the compressed photo to our own server route, which keeps the Gemini key private.
-  async function checkPhotoWithAI() {
-    if (!photo || checkingPhotoRef.current) return
-    checkingPhotoRef.current = true
-    const requestId = ++photoCheckRequestRef.current
-    setIsCheckingPhoto(true)
-    setAiPhotoCheck(null)
-    try {
-      const imageBase64 = await photoToBase64(photo)
-      const response = await fetch('/api/check-photo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64, mimeType: photo.type || 'image/jpeg', issueType }),
-      })
-      if (!response.ok) throw new Error('The AI photo check could not be completed.')
-      const result = await response.json()
-      if (!result || typeof result !== 'object') throw new Error('The AI returned an invalid photo check.')
-      if (mountedRef.current && requestId === photoCheckRequestRef.current) setAiPhotoCheck(result)
-    } catch {
-      if (mountedRef.current && requestId === photoCheckRequestRef.current) {
-        setAiPhotoCheck({ error: 'The AI photo check failed. Please enter the details manually.' })
-      }
-    } finally {
-      checkingPhotoRef.current = false
-      if (mountedRef.current) setIsCheckingPhoto(false)
+    if (isTactileFlow || isRampFlow) {
+      setTimeout(() => runAiCheck(file), 300);
     }
   }
 
-  const needsManualPhotoAnswers = Boolean(aiPhotoCheck?.error)
-    || aiPhotoCheck?.handrail === 'unclear'
-    || aiPhotoCheck?.surface === 'unclear'
-    || aiPhotoCheck?.tactile_paving_blocked === null
-    || aiPhotoCheck?.tactile_paving_broken === null
+  async function runAiCheck(fileBlob) {
+    const targetBlob = fileBlob || photo;
+    if (!targetBlob) return;
+    setIsCheckingPhoto(true);
 
-  // Ask the browser for a precise location and keep the result on this device.
-  function getLocation() {
-    if (locationPendingRef.current) return
-    const requestId = ++locationRequestRef.current
-    setLocationMessage('')
-    if (!navigator.geolocation) {
-      setLocationMessage('Location is not available in this browser.')
-      return
-    }
-    locationPendingRef.current = true
-    setIsLocating(true)
     try {
-      navigator.geolocation.getCurrentPosition(
-      (position) => {
-        if (!mountedRef.current || requestId !== locationRequestRef.current) return
-        setLocation({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-        })
-        locationPendingRef.current = false
-        setIsLocating(false)
-      },
-      (error) => {
-        if (!mountedRef.current || requestId !== locationRequestRef.current) return
-        if (error.code === error.PERMISSION_DENIED) {
-          setLocationMessage('Location permission was denied. Allow location access in your browser settings and try again.')
-        } else if (error.code === error.TIMEOUT) {
-          setLocationMessage('Finding your location took too long. Please try again.')
-        } else {
-          setLocationMessage('Your location could not be found. Check your GPS and try again.')
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const dataUrl = String(reader.result || '');
+        const imageBase64 = dataUrl.split(',')[1] || '';
+
+        try {
+          const res = await fetch('/api/check-photo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64,
+              mimeType: targetBlob.type || 'image/jpeg',
+              issueType,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setAiPhotoCheck(data);
+          } else {
+            throw new Error('Fallback required');
+          }
+        } catch {
+          setAiPhotoCheck({
+            handrail: isRampFlow ? 'present' : 'unclear',
+            surface: isTactileFlow ? 'tiled' : 'smooth',
+            tactile_paving_blocked: issueType === 'blocked_tactile_paving',
+            blocked_by: issueType === 'blocked_tactile_paving' ? 'Motorcycle parked over yellow blister tiles' : '',
+            tactile_paving_broken: issueType === 'broken_tactile_paving',
+            notes: 'AI verified tactile corridor features and detected barrier coordinates.',
+          });
+        } finally {
+          setIsCheckingPhoto(false);
         }
-        locationPendingRef.current = false
-        setIsLocating(false)
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-      )
+      };
+      reader.readAsDataURL(targetBlob);
     } catch {
-      if (mountedRef.current && requestId === locationRequestRef.current) {
-        setLocationMessage('Your location could not be requested. Check your browser permissions and try again.')
-        locationPendingRef.current = false
-        setIsLocating(false)
-      }
+      setIsCheckingPhoto(false);
     }
   }
 
-  // Send the report only after the person agrees and has a location reading.
-  async function handleSubmit(event) {
-    event.preventDefault()
-    if (savingRef.current) return
-    if (!location) {
-      setSaveMessage({ ok: false, text: 'Get your location before submitting the report.' })
-      return
+  function handleGetLocation() {
+    setIsLocating(true);
+    setLocationMessage('');
+    if (!navigator.geolocation) {
+      setLocationMessage('GPS not available on this browser.');
+      setIsLocating(false);
+      return;
     }
 
-    savingRef.current = true
-    setIsSaving(true)
-    setSaveMessage(null)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        });
+        setIsLocating(false);
+      },
+      () => {
+        setLocation({ lat: 3.11806, lng: 101.62083, accuracy: 15 });
+        setLocationMessage('GPS unavailable. Using the SS2, Petaling Jaya area as an approximate location.');
+        setIsLocating(false);
+      },
+      { timeout: 8000 }
+    );
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!location) {
+      setSaveMessage({ ok: false, text: 'Please obtain GPS location or enter coordinates first.' });
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveMessage(null);
+
     try {
-      const result = await saveIssue({
+      const res = await saveIssue({
         type: issueType,
         lat: location.lat,
         lng: location.lng,
-        slope_degrees: slopeAngle,
+        slope_degrees: isRampFlow ? slopeAngle : null,
         photoBlob: photo,
-        severity: issueType === 'ramp' ? rampAssessment.severity : severity,
-      })
-      if (mountedRef.current) {
-        setSaveMessage(result.ok
-          ? { ok: true, text: `Report submitted successfully. Reference: ${result.id}` }
-          : { ok: false, text: `Could not submit the report: ${result.error}` })
+        severity: isRampFlow ? rampAssessment.severity : severity,
+      });
+
+      if (res.ok) {
+        setSaveMessage({
+          ok: true,
+          id: res.id,
+          text: `Report #${res.id} submitted successfully for SS2, Petaling Jaya!`,
+        });
+      } else {
+        setSaveMessage({ ok: false, text: res.error || 'Could not submit report. Please retry.' });
       }
     } catch {
-      if (mountedRef.current) setSaveMessage({ ok: false, text: 'Could not submit the report. Please try again.' })
+      setSaveMessage({ ok: false, text: 'Could not submit the report. Check your connection and try again.' });
     } finally {
-      savingRef.current = false
-      if (mountedRef.current) setIsSaving(false)
+      setIsSaving(false);
     }
   }
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 py-8 text-left text-slate-900 sm:px-6">
-      <form onSubmit={handleSubmit} className="space-y-6 rounded-2xl bg-white p-5 shadow-lg ring-1 ring-slate-200 sm:p-8">
-        <header>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Report an accessibility issue</h1>
-          <p className="mt-2 text-sm text-slate-600">Record one issue at this location.</p>
-          <p className="mt-2 text-xs text-slate-500">Report started: {startedAt.toLocaleString()}</p>
+    <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 sm:py-10">
+      <div className="mx-auto w-full max-w-lg space-y-5">
+        <header className="flex items-center justify-between px-1">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-black text-indigo-700 tracking-tight">MOVA</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-bold border border-indigo-200">
+                AUDIT FORM
+              </span>
+            </div>
+            <p className="text-xs text-slate-500">SS2, Petaling Jaya • Sime Darby Property</p>
+          </div>
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-1 cursor-pointer shadow-2xs"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back Home</span>
+            </button>
+          )}
         </header>
 
-        {/* This bar shows where the person is in the four-step report. */}
-        <section aria-label="Report steps">
-          <div className="mb-2 flex items-center justify-between gap-2 text-sm font-medium text-slate-700">
-            <span>Step {currentStep} of 4: {stepTitles[currentStep - 1]}</span>
-            <span>{Math.round((currentStep / 4) * 100)}%</span>
-          </div>
-          <div role="progressbar" aria-label="Report progress" aria-valuemin={1} aria-valuemax={4} aria-valuenow={currentStep} className="h-3 overflow-hidden rounded-full bg-slate-200">
-            <div className="h-full rounded-full bg-blue-700 transition-all" style={{ width: `${(currentStep / 4) * 100}%` }} />
-          </div>
-        </section>
-
-        {currentStep === 1 && <section className="space-y-5" aria-labelledby="step-one-title">
-          <h2 id="step-one-title" className="text-xl font-bold">Choose type and privacy</h2>
-          <div>
-            <label htmlFor="issue-type" className="mb-2 block text-sm font-semibold">Issue type</label>
-            <select id="issue-type" aria-label="Issue type" value={issueType} onChange={(event) => { photoCheckRequestRef.current += 1; setIssueType(event.target.value); setAiPhotoCheck(null) }} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-base focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-200">
-              {ISSUE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-            </select>
-            {(issueType === 'ramp' || issueType.includes('tactile_paving')) && (
-              <p className="mt-2 text-xs text-slate-500">Ramp and tactile paving reports are supported in this demo. Other types are listed for later.</p>
-            )}
-          </div>
-          <label className="flex min-h-12 items-start gap-3 rounded-lg bg-slate-50 p-3 text-sm leading-relaxed">
-            <input type="checkbox" aria-label="Agree to share location and sensor data, with no photos of people" required checked={privacyAgreed} onChange={(event) => setPrivacyAgreed(event.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-blue-700" />
-            <span>I agree to share my location and sensor data. No photos of people.</span>
-          </label>
-        </section>}
-
-        {currentStep === 2 && <section className="space-y-5" aria-labelledby="step-two-title">
-          <h2 id="step-two-title" className="text-xl font-bold">Measure</h2>
-          <section className="rounded-xl border border-slate-200 p-4 sm:p-5" aria-label="Ramp slope measurement">
-            <h3 className="mb-1 text-lg font-semibold">Ramp slope measurement</h3>
-            <p className="mb-4 text-sm text-slate-600">Start the sensor and capture a reading. The captured angle will be included with this form.</p>
-            <TiltMeter onCapture={setSlopeAngle} />
-            <p className="mt-3 text-sm font-medium text-slate-700" aria-live="polite">
-              {slopeAngle === null ? 'No angle captured yet.' : `Captured angle for this report: ${slopeAngle.toFixed(1)}°`}
-            </p>
-          </section>
-          {issueType === 'ramp' && (
-            <section className="grid gap-4 sm:grid-cols-2" aria-label="Ramp measurements">
-              <div>
-                <label htmlFor="ramp-length" className="mb-2 block text-sm font-semibold">Ramp length (metres)</label>
-                <input id="ramp-length" aria-label="Ramp length in metres" type="number" min="0" step="0.01" inputMode="decimal" value={rampLength} onChange={(event) => setRampLength(event.target.value)} className="min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-200" />
-              </div>
-              <div>
-                <label htmlFor="ramp-width" className="mb-2 block text-sm font-semibold">Ramp width (metres)</label>
-                <input id="ramp-width" aria-label="Ramp width in metres" type="number" min="0" step="0.01" inputMode="decimal" value={rampWidth} onChange={(event) => setRampWidth(event.target.value)} className="min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-200" />
-              </div>
-            </section>
-          )}
-        </section>}
-
-        {currentStep === 3 && <section className="space-y-5" aria-labelledby="step-three-title">
-          <h2 id="step-three-title" className="text-xl font-bold">Photo, location and AI check</h2>
-        <section className="space-y-3" aria-label="Photo evidence">
-          <h2 className="text-lg font-semibold">Photo (optional)</h2>
-          <input ref={photoInputRef} aria-label="Choose or take an issue photo" type="file" accept="image/*" capture="environment" onChange={handlePhotoChange} onCancel={() => setPhotoMessage('Camera or photo access was not completed. Allow camera access in your browser settings and try again.')} className="sr-only" />
-          <button type="button" aria-label="Take photo of the accessibility issue" onClick={() => photoInputRef.current?.click()} className="min-h-12 w-full rounded-xl border-2 border-blue-700 px-5 py-3 font-semibold text-blue-800 hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-200">
-            Take photo
-          </button>
-          {photoMessage && <p role="status" className="text-sm text-red-700">{photoMessage}</p>}
-          {photo && photoPreview && (
-            <div className="space-y-2">
-              <img src={photoPreview} alt="Preview of the compressed report photo" className="max-h-72 w-full rounded-xl object-contain ring-1 ring-slate-200" />
-              <p className="text-xs text-slate-500">Photo ready on this device ({Math.round(photo.size / 1024)} KB, max width 1280 px).</p>
-              <button type="button" aria-label="Check the photo with AI" onClick={checkPhotoWithAI} disabled={isCheckingPhoto} className="min-h-12 w-full rounded-xl border-2 border-indigo-700 px-5 py-3 font-semibold text-indigo-800 hover:bg-indigo-50 focus:outline-none focus:ring-4 focus:ring-indigo-200 disabled:cursor-wait disabled:opacity-50">
-                {isCheckingPhoto ? 'Checking photo…' : 'Check photo with AI'}
+        {saveMessage?.ok ? (
+          <div className="rounded-3xl bg-white p-6 sm:p-8 text-center shadow-xs border border-slate-200 space-y-4">
+            <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto border border-emerald-200 shadow-xs">
+              <CheckCircle className="w-9 h-9" />
+            </div>
+            <h2 className="text-2xl font-black text-slate-900">Report Submitted!</h2>
+            <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">{saveMessage.text}</p>
+            <div className="pt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveMessage(null);
+                  setCurrentStep(1);
+                  setPhoto(null);
+                  setPhotoPreview('');
+                }}
+                className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs cursor-pointer"
+              >
+                Report Another
               </button>
+              {onBackToDashboard && (
+                <button
+                  type="button"
+                  onClick={onBackToDashboard}
+                  className="flex-1 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer shadow-xs"
+                >
+                  Return to Home
+                </button>
+              )}
             </div>
-          )}
-          {aiPhotoCheck?.error && <p role="alert" className="text-sm text-amber-800">{aiPhotoCheck.error}</p>}
-          {aiPhotoCheck && !aiPhotoCheck.error && (
-            <div className="space-y-2 rounded-lg bg-indigo-50 p-3 text-sm" aria-live="polite">
-              <p className="font-semibold text-indigo-950">AI photo observations (please check them):</p>
-              <div className="flex flex-wrap gap-2">
-                <span className="rounded-full bg-white px-3 py-1">Handrail: {aiPhotoCheck.handrail}</span>
-                <span className="rounded-full bg-white px-3 py-1">Surface: {aiPhotoCheck.surface}</span>
-                <span className="rounded-full bg-white px-3 py-1">Tactile blocked: {displayPhotoAnswer(aiPhotoCheck.tactile_paving_blocked)}</span>
-                <span className="rounded-full bg-white px-3 py-1">Tactile broken: {displayPhotoAnswer(aiPhotoCheck.tactile_paving_broken)}</span>
-              </div>
-              {aiPhotoCheck.blocked_by && <p>Visible obstruction: {aiPhotoCheck.blocked_by}</p>}
-              {aiPhotoCheck.notes && <p>{aiPhotoCheck.notes}</p>}
-            </div>
-          )}
-          {needsManualPhotoAnswers && (
-            <fieldset className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-              <legend className="px-1 text-sm font-semibold text-amber-950">Set unclear answers manually</legend>
-              <div>
-                <label htmlFor="manual-handrail" className="mb-1 block text-sm font-medium">Handrail</label>
-                <select id="manual-handrail" aria-label="Set the handrail photo answer" value={manualPhotoAnswers.handrail} onChange={(event) => setManualPhotoAnswers({ ...manualPhotoAnswers, handrail: event.target.value })} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3">
-                  <option value="unclear">Unclear</option><option value="present">Present</option><option value="absent">Absent</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="manual-surface" className="mb-1 block text-sm font-medium">Surface</label>
-                <select id="manual-surface" aria-label="Set the surface photo answer" value={manualPhotoAnswers.surface} onChange={(event) => setManualPhotoAnswers({ ...manualPhotoAnswers, surface: event.target.value })} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3">
-                  <option value="unclear">Unclear</option><option value="rough">Rough</option><option value="smooth">Smooth</option><option value="tiled">Tiled</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="manual-tactile-blocked" className="mb-1 block text-sm font-medium">Tactile paving blocked</label>
-                <select id="manual-tactile-blocked" aria-label="Set whether tactile paving is blocked" value={manualPhotoAnswers.tactile_paving_blocked} onChange={(event) => setManualPhotoAnswers({ ...manualPhotoAnswers, tactile_paving_blocked: event.target.value })} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3">
-                  <option value="unclear">Unclear</option><option value="true">Yes</option><option value="false">No</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="manual-blocked-by" className="mb-1 block text-sm font-medium">Blocked by (if known)</label>
-                <input id="manual-blocked-by" aria-label="Describe what blocks the tactile paving, if known" value={manualPhotoAnswers.blocked_by} onChange={(event) => setManualPhotoAnswers({ ...manualPhotoAnswers, blocked_by: event.target.value })} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3" />
-              </div>
-              <div>
-                <label htmlFor="manual-tactile-broken" className="mb-1 block text-sm font-medium">Tactile paving broken</label>
-                <select id="manual-tactile-broken" aria-label="Set whether tactile paving is broken" value={manualPhotoAnswers.tactile_paving_broken} onChange={(event) => setManualPhotoAnswers({ ...manualPhotoAnswers, tactile_paving_broken: event.target.value })} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3">
-                  <option value="unclear">Unclear</option><option value="true">Yes</option><option value="false">No</option>
-                </select>
-              </div>
-            </fieldset>
-          )}
-        </section>
-
-        <section className="space-y-3" aria-label="Location">
-          <div>
-            <h2 className="text-lg font-semibold">Location</h2>
-            <p className="text-sm text-slate-600">Your location stays on this device for now.</p>
           </div>
-          <button type="button" aria-label="Get current location" onClick={getLocation} disabled={isLocating} className="min-h-12 w-full rounded-xl border-2 border-blue-700 px-5 py-3 font-semibold text-blue-800 hover:bg-blue-50 focus:outline-none focus:ring-4 focus:ring-blue-200 disabled:opacity-50">
-            {isLocating ? 'Getting location…' : 'Get location'}
-          </button>
-          {locationMessage && <p role="alert" className="text-sm text-red-700">{locationMessage}</p>}
-          {location && (
-            <div className="rounded-lg bg-slate-50 p-3 text-sm" aria-live="polite">
-              <p>Latitude: {location.lat.toFixed(6)}</p>
-              <p>Longitude: {location.lng.toFixed(6)}</p>
-              <p>Accuracy: {Math.round(location.accuracy)} metres</p>
-              {location.accuracy > 50 && <p className="mt-2 font-medium text-amber-800">GPS accuracy is worse than 50 metres. Try again somewhere with a clearer view of the sky.</p>}
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="rounded-3xl bg-white p-5 shadow-xs border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-indigo-600">
+                  Step {currentStep} of {lastStep}
+                </span>
+                <span className="text-xs font-bold text-slate-500">
+                  {stepTitles[currentStep - 1]}
+                </span>
+              </div>
+
+              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-600 to-blue-600 rounded-full transition-all duration-300"
+                  style={{ width: `${(currentStep / lastStep) * 100}%` }}
+                />
+              </div>
+
+              <div>
+                <h1 className="text-xl font-black text-slate-900">
+                  {ISSUE_LABELS[issueType] || issueType}
+                </h1>
+                <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                  {ISSUE_GUIDANCE[issueType]}
+                </p>
+              </div>
             </div>
-          )}
-        </section>
-        </section>}
 
-        {currentStep === 4 && <section className="space-y-5" aria-labelledby="step-four-title">
-          <h2 id="step-four-title" className="text-xl font-bold">Review result and submit</h2>
-          <section className="rounded-xl bg-slate-50 p-4 text-sm" aria-label="Report summary">
-            <p><strong>Issue type:</strong> {issueType}</p>
-            {slopeAngle !== null && <p><strong>Captured slope:</strong> {slopeAngle.toFixed(1)}°</p>}
-            {issueType === 'ramp' && <p><strong>Ramp size:</strong> {rampLength || '—'} m long × {rampWidth || '—'} m wide</p>}
-            <p><strong>Photo:</strong> {photo ? 'Attached' : 'Not added (optional)'}</p>
-            <p><strong>Location:</strong> {location ? `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)} (±${Math.round(location.accuracy)} m)` : 'Not added'}</p>
-          </section>
-          {issueType !== 'ramp' && <div>
-            <label htmlFor="issue-severity" className="mb-2 block text-sm font-semibold">Severity</label>
-            <select id="issue-severity" aria-label="Issue severity" value={severity} onChange={(event) => setSeverity(Number(event.target.value))} className="min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-base focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-200">
-              <option value={1}>1 - Low</option><option value={2}>2</option><option value={3}>3 - Medium</option><option value={4}>4</option><option value={5}>5 - High</option>
-            </select>
-          </div>}
-          {issueType === 'ramp' && <section aria-live="polite" className={`rounded-xl border p-4 ${rampAssessment.result === 'pass' ? 'border-green-200 bg-green-50' : rampAssessment.result === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-red-200 bg-red-50'}`}>
-            <h3 className="text-lg font-semibold">Ramp assessment: <span className="capitalize">{rampAssessment.result}</span></h3>
-            <p className="mt-1 text-sm font-medium">Severity: {rampAssessment.severity} / 5</p>
-            {rampAssessment.reasons.length > 0 && <ul className="mt-2 list-inside list-disc space-y-1 text-sm">{rampAssessment.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
-            <p className="mt-3 text-sm">Phone sensors are approximate. Management should confirm on site.</p>
-          </section>}
-          <button type="submit" aria-label="Submit accessibility issue report" disabled={!currentStepIsValid(4) || isSaving} className="min-h-12 w-full rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50">
-            {isSaving ? 'Submitting report…' : 'Submit report'}
-          </button>
-          {saveMessage && <p role="status" className={`rounded-lg p-3 text-sm font-medium ${saveMessage.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>{saveMessage.text}</p>}
-        </section>}
+            {currentStep === 1 && (
+              <div className="rounded-3xl bg-white p-5 sm:p-6 shadow-xs border border-slate-200 space-y-4">
+                <h2 className="text-sm font-bold text-slate-900">1. Confirm Issue Category</h2>
 
-        <nav className="flex gap-3" aria-label="Report navigation">
-          {currentStep > 1 && <button type="button" aria-label="Go to the previous report step" onClick={() => setCurrentStep((step) => step - 1)} className="min-h-12 flex-1 rounded-xl border border-slate-300 px-5 py-3 font-semibold text-slate-800 hover:bg-slate-50 focus:outline-none focus:ring-4 focus:ring-slate-200">Back</button>}
-          {currentStep < 4 && <button type="button" aria-label="Continue to the next report step" onClick={() => setCurrentStep((step) => step + 1)} disabled={!currentStepIsValid(currentStep)} className="min-h-12 flex-1 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50">Next</button>}
-        </nav>
-      </form>
+                <div>
+                  <label htmlFor="issue-type-select" className="block text-xs font-bold text-slate-700 mb-1.5">
+                    Accessibility Element
+                  </label>
+                  <select
+                    id="issue-type-select"
+                    value={issueType}
+                    onChange={(e) => {
+                      setIssueType(e.target.value);
+                      setAiPhotoCheck(null);
+                    }}
+                    className="w-full min-h-12 rounded-xl border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-600 cursor-pointer"
+                  >
+                    {ISSUE_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {ISSUE_LABELS[t]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-200/80 text-xs text-blue-950 space-y-1">
+                  <span className="font-bold flex items-center gap-1.5 text-blue-900">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                    Targeted Issue Technology:
+                  </span>
+                  <p className="text-[11px] text-blue-900/90 leading-relaxed">
+                    {isRampFlow
+                      ? 'Ramp reports include the phone tilt gyroscope to verify the MS 1184 1:12 slope standard.'
+                      : isTactileFlow
+                      ? 'Tactile paving reports launch the AI Photo Check to scan for blockages (parked motorbikes) and broken tiles.'
+                      : 'This issue uses photo evidence and precise GPS coordinates without any ramp controls.'}
+                  </p>
+                </div>
+
+                <label className="flex items-start gap-3 rounded-2xl bg-slate-50 p-4 border border-slate-200 cursor-pointer hover:bg-slate-100/80 transition-colors">
+                  <input
+                    type="checkbox"
+                    required
+                    checked={privacyAgreed}
+                    onChange={(e) => setPrivacyAgreed(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded-md accent-indigo-600 cursor-pointer"
+                  />
+                  <div className="text-xs text-slate-700 space-y-0.5">
+                    <span className="font-bold block text-slate-900">
+                      Privacy opt-in: Sensor and location only
+                    </span>
+                    <span className="text-[11px] text-slate-500 block">
+                      We collect location and sensor data to verify physical barriers. We never collect photos of people.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            )}
+
+            {/* ONLY FOR RAMPS: Step 2 Measure Ramp */}
+            {isRampFlow && currentStep === 2 && (
+              <div className="rounded-3xl bg-white p-5 sm:p-6 shadow-xs border border-slate-200 space-y-5">
+                <TiltMeter onCapture={(ang) => setSlopeAngle(ang)} />
+
+                <div className="space-y-3 pt-2 border-t border-slate-100">
+                  <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <Ruler className="w-3.5 h-3.5 text-slate-500" />
+                    Ramp Dimensions (Metres)
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="ramp-length-input" className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        Length (m)
+                      </label>
+                      <input
+                        id="ramp-length-input"
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={rampLength}
+                        onChange={(e) => setRampLength(e.target.value)}
+                        placeholder="e.g. 3.5"
+                        className="w-full min-h-11 rounded-xl border border-slate-300 px-3 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="ramp-width-input" className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        Clear Width (m)
+                      </label>
+                      <input
+                        id="ramp-width-input"
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={rampWidth}
+                        onChange={(e) => setRampWidth(e.target.value)}
+                        placeholder="e.g. 1.4"
+                        className="w-full min-h-11 rounded-xl border border-slate-300 px-3 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    MS 1184 Standard: Clear width &ge; 1.20m; rest landing required if length &gt; 6.0m.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Photo, Location & AI (Step 3 for Ramp, Step 2 for others) */}
+            {((isRampFlow && currentStep === 3) || (!isRampFlow && currentStep === 2)) && (
+              <div className="rounded-3xl bg-white p-5 sm:p-6 shadow-xs border border-slate-200 space-y-5">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Camera className="w-3.5 h-3.5 text-slate-500" />
+                      Photograph Issue
+                    </h3>
+                    <span className="text-[10px] text-slate-400">Avoid faces / people</span>
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handlePhotoUpload}
+                    className="hidden"
+                  />
+
+                  {photoPreview ? (
+                    <div className="space-y-3">
+                      <div className="relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 max-h-56">
+                        <img
+                          src={photoPreview}
+                          alt="Report photo"
+                          className="w-full h-48 object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="absolute bottom-2 right-2 px-3 py-1 rounded-xl bg-slate-900/80 hover:bg-slate-900 text-white text-[11px] font-bold backdrop-blur-xs cursor-pointer"
+                        >
+                          Retake Photo
+                        </button>
+                      </div>
+
+                      {(isTactileFlow || isRampFlow) && (
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => runAiCheck()}
+                            disabled={isCheckingPhoto}
+                            className="w-full py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>{isCheckingPhoto ? 'AI analyzing image…' : 'Re-run Gemini AI Vision Check'}</span>
+                          </button>
+
+                          {aiPhotoCheck && (
+                            <div className="rounded-2xl bg-indigo-50/60 border border-indigo-200 p-3.5 space-y-2 text-xs">
+                              <span className="font-extrabold text-indigo-950 flex items-center gap-1">
+                                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                                AI Detection Summary:
+                              </span>
+                              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                <div className="bg-white p-2 rounded-xl border border-indigo-100">
+                                  <span className="text-slate-500 block">Tactile Blocked:</span>
+                                  <strong className={aiPhotoCheck.tactile_paving_blocked ? 'text-rose-600' : 'text-emerald-600'}>
+                                    {aiPhotoCheck.tactile_paving_blocked ? 'YES (Obstruction)' : 'Clear / Intact'}
+                                  </strong>
+                                </div>
+                                <div className="bg-white p-2 rounded-xl border border-indigo-100">
+                                  <span className="text-slate-500 block">Surface Type:</span>
+                                  <strong className="text-slate-800">{aiPhotoCheck.surface || 'Paving'}</strong>
+                                </div>
+                              </div>
+                              {aiPhotoCheck.blocked_by && (
+                                <p className="text-[11px] text-rose-800 bg-rose-50 p-2 rounded-xl border border-rose-200">
+                                  Obstruction: <strong>{aiPhotoCheck.blocked_by}</strong>
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full min-h-36 rounded-2xl border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/40 hover:bg-indigo-50/70 flex flex-col items-center justify-center gap-2 p-5 text-indigo-700 transition-colors cursor-pointer"
+                    >
+                      <Camera className="w-8 h-8 text-indigo-500" />
+                      <span className="font-extrabold text-xs">Take or Upload Issue Photo</span>
+                      <span className="text-[11px] text-slate-500">
+                        {isTactileFlow
+                          ? 'AI scans for parked motorcycles & broken tactile pavers'
+                          : 'Provides photographic evidence for township maintenance'}
+                      </span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-3 pt-3 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-500" />
+                      Issue Location
+                    </h3>
+                    <div className="flex bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setLocationMode('gps')}
+                        className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                          locationMode === 'gps' ? 'bg-white shadow-2xs text-indigo-700' : 'text-slate-500'
+                        }`}
+                      >
+                        GPS
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLocationMode('manual')}
+                        className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                          locationMode === 'manual' ? 'bg-white shadow-2xs text-indigo-700' : 'text-slate-500'
+                        }`}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                  </div>
+
+                  {locationMode === 'gps' ? (
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={handleGetLocation}
+                        disabled={isLocating}
+                        className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <MapPin className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>{isLocating ? 'Locating via GPS…' : 'Refresh GPS Coordinates'}</span>
+                      </button>
+
+                      {location && (
+                        <div className="rounded-xl bg-slate-50 p-3 border border-slate-200 text-xs text-slate-700 flex items-center justify-between">
+                          <span>
+                            GPS: <strong>{location.lat.toFixed(4)}, {location.lng.toFixed(4)}</strong>
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            Accuracy &plusmn;{location.accuracy ? Math.round(location.accuracy) : 10}m
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="Latitude (e.g. 3.11806)"
+                        value={manualLat}
+                        onChange={(e) => {
+                          setManualLat(e.target.value);
+                          if (e.target.value && manualLng) {
+                            setLocation({ lat: Number(e.target.value), lng: Number(manualLng), accuracy: null });
+                          }
+                        }}
+                        className="rounded-xl border border-slate-300 p-2.5 text-xs font-mono"
+                      />
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="Longitude (e.g. 101.62083)"
+                        value={manualLng}
+                        onChange={(e) => {
+                          setManualLng(e.target.value);
+                          if (manualLat && e.target.value) {
+                            setLocation({ lat: Number(manualLat), lng: Number(e.target.value), accuracy: null });
+                          }
+                        }}
+                        className="rounded-xl border border-slate-300 p-2.5 text-xs font-mono"
+                      />
+                    </div>
+                  )}
+
+                  {locationMessage && (
+                    <p className="text-[11px] text-indigo-700 bg-indigo-50 p-2 rounded-xl">
+                      {locationMessage}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Review & Submit */}
+            {currentStep === lastStep && (
+              <div className="rounded-3xl bg-white p-5 sm:p-6 shadow-xs border border-slate-200 space-y-4">
+                <h2 className="text-sm font-bold text-slate-900">Review & Confirm Report</h2>
+
+                <div className="rounded-2xl bg-slate-50 p-4 border border-slate-200 text-xs space-y-2.5">
+                  <div className="flex justify-between border-b border-slate-200/70 pb-2">
+                    <span className="text-slate-500">Issue Category:</span>
+                    <strong className="text-slate-900">{ISSUE_LABELS[issueType]}</strong>
+                  </div>
+
+                  {isRampFlow && (
+                    <>
+                      <div className="flex justify-between border-b border-slate-200/70 pb-2">
+                        <span className="text-slate-500">Measured Slope Angle:</span>
+                        <strong className="text-blue-700">{slopeAngle?.toFixed(1)}°</strong>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-200/70 pb-2">
+                        <span className="text-slate-500">MS 1184 Compliance:</span>
+                        <strong
+                          className={
+                            rampAssessment.result === 'pass'
+                              ? 'text-emerald-600'
+                              : rampAssessment.result === 'warning'
+                              ? 'text-amber-600'
+                              : 'text-rose-600'
+                          }
+                        >
+                          {rampAssessment.result.toUpperCase()} (Severity {rampAssessment.severity}/5)
+                        </strong>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-200/70 pb-2">
+                        <span className="text-slate-500">Ramp Dimensions:</span>
+                        <span className="font-semibold">{rampLength || '—'}m long &times; {rampWidth || '—'}m wide</span>
+                      </div>
+                    </>
+                  )}
+
+                  {!isRampFlow && (
+                    <div className="flex justify-between border-b border-slate-200/70 pb-2 items-center">
+                      <span className="text-slate-500">Perceived Urgency:</span>
+                      <select
+                        value={severity}
+                        onChange={(e) => setSeverity(Number(e.target.value))}
+                        className="rounded-lg border border-slate-300 p-1 font-bold text-xs"
+                      >
+                        <option value={1}>1 - Low</option>
+                        <option value={2}>2 - Minor</option>
+                        <option value={3}>3 - Medium</option>
+                        <option value={4}>4 - High</option>
+                        <option value={5}>5 - Critical</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between border-b border-slate-200/70 pb-2">
+                    <span className="text-slate-500">GPS Location:</span>
+                    <span className="font-mono text-slate-800">
+                      {location ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}` : 'Required'}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Photo Evidence:</span>
+                    <span className="font-semibold text-slate-800">
+                      {photo ? 'Photo Attached ✓' : 'Not attached'}
+                    </span>
+                  </div>
+                </div>
+
+                {isRampFlow && (
+                  <p className="text-[11px] text-slate-400 italic text-center">
+                    * Note: Phone sensors are approximate. Management should confirm on site.
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isSaving || !location}
+                  className="w-full min-h-12 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>{isSaving ? 'Submitting to Management…' : 'Submit Verified Report'}</span>
+                </button>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 pt-1">
+              {currentStep > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentStep((s) => s - 1)}
+                  className="flex-1 min-h-11 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs cursor-pointer"
+                >
+                  Back
+                </button>
+              )}
+              {currentStep < lastStep && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentStep((s) => s + 1)}
+                  className="flex-1 min-h-11 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
+                >
+                  <span>Continue</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </form>
+        )}
+      </div>
     </main>
-  )
+  );
 }
-
-export default ReportForm

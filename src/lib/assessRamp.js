@@ -1,51 +1,44 @@
-// TODO: verify each limit against the Malaysian accessibility standard before presenting.
-const MAX_SLOPE_DEGREES = 4.8
-const SLOPE_WARNING_TOLERANCE_DEGREES = 1
-const MIN_RAMP_WIDTH_M = 1.2
-const SEVERITY_4_SLOPE_DEGREES = MAX_SLOPE_DEGREES + SLOPE_WARNING_TOLERANCE_DEGREES + 1
-const VERY_STEEP_SLOPE_DEGREES = MAX_SLOPE_DEGREES + SLOPE_WARNING_TOLERANCE_DEGREES + 2
-
-// Return a clear status and severity for the measurements supplied so far.
-export function assessRamp(input = {}) {
-  const { slopeDegrees, lengthM, widthM } = input || {}
-  const reasons = []
-  let result = 'pass'
-  let severity = 1
-  const hasSlope = Number.isFinite(slopeDegrees) && slopeDegrees >= 0
-  const hasLength = Number.isFinite(lengthM) && lengthM > 0
-  const hasWidth = Number.isFinite(widthM) && widthM > 0
-
-  if (!hasSlope) reasons.push('Capture a valid slope angle to assess this ramp.')
-  if (!hasLength) reasons.push('Enter a ramp length greater than zero metres.')
-  if (!hasWidth) reasons.push('Enter a ramp width greater than zero metres.')
-
-  // Missing measurements make the result a warning until the ramp can be checked.
-  if (!hasSlope || !hasLength || !hasWidth) {
-    result = 'warning'
-    severity = 2
+export function assessRamp({ slopeDegrees, lengthM, widthM }) {
+  if (slopeDegrees === null || !Number.isFinite(slopeDegrees)) {
+    return {
+      result: 'warning',
+      severity: 3,
+      reasons: ['No slope measurement recorded.'],
+    };
   }
 
-  if (hasSlope && slopeDegrees > MAX_SLOPE_DEGREES) {
-    reasons.push(`Slope is above the ${MAX_SLOPE_DEGREES}° placeholder limit.`)
-    if (slopeDegrees <= MAX_SLOPE_DEGREES + SLOPE_WARNING_TOLERANCE_DEGREES) {
-      result = result === 'fail' ? 'fail' : 'warning'
-      severity = Math.max(severity, 2)
-    } else {
-      result = 'fail'
-      severity = Math.max(
-        severity,
-        slopeDegrees >= VERY_STEEP_SLOPE_DEGREES
-          ? 5
-          : slopeDegrees >= SEVERITY_4_SLOPE_DEGREES ? 4 : 3,
-      )
+  const reasons = [];
+  let result = 'pass';
+  let severity = 1;
+
+  // Malaysian MS 1184 Standard: 1:12 slope is 4.76 degrees
+  if (slopeDegrees > 7.13) {
+    result = 'fail';
+    severity = 5;
+    reasons.push(`Slope is ${slopeDegrees.toFixed(1)}° (steeper than 1:8). Serious roll-over hazard for independent wheelchair users.`);
+  } else if (slopeDegrees > 4.76) {
+    result = 'warning';
+    severity = 3;
+    reasons.push(`Slope is ${slopeDegrees.toFixed(1)}° (between 1:12 and 1:8). Exceeds MS 1184 maximum of 4.76° (1:12) for independent transit.`);
+  } else {
+    reasons.push(`Slope is ${slopeDegrees.toFixed(1)}° (1:12 or gentler), compliant with MS 1184 standard.`);
+  }
+
+  if (lengthM !== null && lengthM !== undefined && Number.isFinite(lengthM)) {
+    if (lengthM > 6.0) {
+      reasons.push(`Ramp length is ${lengthM.toFixed(1)}m. Intermediate rest landing required every 6m under MS 1184.`);
+      if (result === 'pass') result = 'warning';
+      severity = Math.max(severity, 3);
     }
   }
 
-  if (hasWidth && widthM < MIN_RAMP_WIDTH_M) {
-    reasons.push(`Ramp width is below the ${MIN_RAMP_WIDTH_M} m placeholder minimum.`)
-    result = 'fail'
-    severity = Math.max(severity, 3)
+  if (widthM !== null && widthM !== undefined && Number.isFinite(widthM)) {
+    if (widthM < 1.2) {
+      reasons.push(`Clear width is ${widthM.toFixed(2)}m (below MS 1184 minimum 1.20m requirement).`);
+      if (result === 'pass') result = 'warning';
+      severity = Math.max(severity, 3);
+    }
   }
 
-  return { result, severity, reasons }
+  return { result, severity, reasons };
 }
