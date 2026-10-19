@@ -1,8 +1,53 @@
-import { useEffect, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
 import ReportForm from './ReportForm.jsx';
 import MotionLogger from './MotionLogger.jsx';
-import { getSupabaseClient } from './lib/supabaseClient.js';
-import { ArrowRight, Building, User, LogOut, Sparkles } from 'lucide-react';
+import TiltMeter from './TiltMeter.jsx';
+import { 
+  ArrowRight, 
+  Building, 
+  User, 
+  LogOut, 
+  Sparkles,
+  Navigation, 
+  Store, 
+  ShieldAlert, 
+  Award, 
+  CheckCircle2, 
+  Eye, 
+  Accessibility, 
+  RefreshCw,
+  PhoneCall,
+  Clock,
+  Mic,
+  MicOff,
+  Volume2
+} from 'lucide-react';
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+const activeIcon = L.divIcon({
+  className: 'custom-pin-active',
+  html: `<div style="background-color: #2563eb; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; border: 3px solid white; box-shadow: 0 4px 10px rgba(37,99,235,0.5);">📍</div>`,
+  iconSize: [32, 32],
+  iconAnchor: [16, 32]
+});
+
+const defaultIcon = L.divIcon({
+  className: 'custom-pin-default',
+  html: `<div style="background-color: #ef4444; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; border: 2px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">📍</div>`,
+  iconSize: [28, 28],
+  iconAnchor: [14, 28]
+});
+
 const REPORT_ISSUES = [
   {
     type: 'blocked_tactile_paving',
@@ -40,7 +85,7 @@ const REPORT_ISSUES = [
     type: 'lift_out_of_service',
     title: 'Lift out of service',
     detail: 'An accessible lift at a pedestrian link bridge is unavailable.',
-    icon: '⇵',
+    icon: '🛗',
     badge: 'PHOTO & LOCATION',
     color: 'blue',
   },
@@ -60,6 +105,45 @@ const REPORT_ISSUES = [
     badge: 'PHOTO & LOCATION',
     color: 'blue',
   },
+];
+
+const INITIAL_MOCK_ISSUES = [
+  {
+    id: 'mock-1',
+    type: 'ramp',
+    lat: 3.0810,
+    lng: 101.4465,
+    slope_degrees: 8.5,
+    location_name: 'Commercial Lot 4 Entrance, Bandar Bukit Raja',
+    severity: 4,
+    status: 'reported',
+    handrail: false,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'mock-2',
+    type: 'blocked paving',
+    lat: 3.0795,
+    lng: 101.4442,
+    slope_degrees: 0,
+    location_name: 'Pusat Bandar Bus Stop, Bandar Bukit Raja',
+    severity: 3,
+    status: 'reported',
+    handrail: true,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'mock-3',
+    type: 'broken paving',
+    lat: 3.0785,
+    lng: 101.4430,
+    slope_degrees: 0,
+    location_name: 'Townpark Pedestrian Path',
+    severity: 2,
+    status: 'fixed',
+    handrail: true,
+    created_at: new Date().toISOString()
+  }
 ];
 
 function BrandHeader({ onLogout }) {
@@ -98,45 +182,15 @@ function AuthPage({ onSignedIn }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('resident');
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
   const isSignup = mode === 'signup';
 
-  async function submitAuth(e) {
+  function submitAuth(e) {
     e.preventDefault();
-    setBusy(true);
-    setMessage('');
-    try {
-      const supabase = getSupabaseClient();
-      if (isSignup) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { role },
-            emailRedirectTo: window.location.origin,
-          },
-        });
-        if (error) throw error;
-        if (data.session?.user) {
-          onSignedIn(data.session.user);
-        } else if (data.user) {
-          setMessage('Account created. Check your email and confirm your address before signing in. If no email arrives, ask the project admin to check Supabase Auth email confirmation and SMTP settings.');
-        } else {
-          setMessage('Account created. Check your email for a confirmation link before signing in.');
-        }
-      } else {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        if (data.user) onSignedIn(data.user);
-      }
-    } catch (err) {
-      setMessage(err?.code === 'email_not_confirmed'
-        ? 'This account is not confirmed yet. Open the confirmation link sent by email, then sign in again. If you cannot receive the email, the Supabase project admin must adjust the Auth email confirmation settings.'
-        : err?.message || 'Sign in failed. Check your details.');
-    } finally {
-      setBusy(false);
-    }
+    onSignedIn({
+      id: 'usr_' + role,
+      email: email || `${role}@ss2.mova.my`,
+      user_metadata: { role },
+    });
   }
 
   function handleQuickDemo(targetRole) {
@@ -164,8 +218,7 @@ function AuthPage({ onSignedIn }) {
             </h1>
 
             <p className="text-sm text-blue-100 leading-relaxed max-w-md">
-              Report physical access problems with a photo, verified GPS location, and targeted tools:
-              ramp reports get a <strong>live tilt meter</strong>; tactile paving reports get an <strong>AI vision check</strong>.
+              Report physical access problems with a photo, verified GPS location, and targeted tools.
             </p>
           </div>
         </section>
@@ -256,28 +309,18 @@ function AuthPage({ onSignedIn }) {
             />
           </div>
 
-          {message && (
-            <p className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-800">
-              {message}
-            </p>
-          )}
-
           <button
             type="submit"
-            disabled={busy}
             className="w-full min-h-12 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-xs transition-colors cursor-pointer"
           >
-            {busy ? 'Please wait…' : isSignup ? 'Create Account' : 'Sign In'}
+            {isSignup ? 'Create Account' : 'Sign In'}
           </button>
 
           <p className="text-center text-xs text-slate-500 pt-1">
             {isSignup ? 'Already have an account?' : 'New to MOVA?'}{' '}
             <button
               type="button"
-              onClick={() => {
-                setMode(isSignup ? 'signin' : 'signup');
-                setMessage('');
-              }}
+              onClick={() => setMode(isSignup ? 'signin' : 'signup')}
               className="font-extrabold text-indigo-600 hover:underline cursor-pointer ml-1"
             >
               {isSignup ? 'Sign in' : 'Create account'}
@@ -340,7 +383,7 @@ function IssueCard({ title, detail, icon, color, badge, onClick }) {
   );
 }
 
-function ResidentHome({ onChooseIssue, onOpenPassive, onLogout }) {
+function ResidentHome({ onChooseIssue, onOpenPassive, onOpenPitch, onLogout }) {
   return (
     <main className="min-h-screen bg-slate-50 pb-16 text-left text-slate-900">
       <BrandHeader onLogout={onLogout} />
@@ -361,7 +404,7 @@ function ResidentHome({ onChooseIssue, onOpenPassive, onLogout }) {
               Spot a barrier? Let’s measure and fix it.
             </h1>
             <p className="text-xs sm:text-sm text-blue-100 max-w-xl leading-relaxed">
-              Choose the problem you encountered below. Each issue launches its own specialized sensor or AI check—ramp tilt is only used for ramps!
+              Choose the problem you encountered below. Each issue launches its own specialized sensor or AI check.
             </p>
 
             <div className="pt-2 flex flex-wrap gap-2.5">
@@ -378,6 +421,13 @@ function ResidentHome({ onChooseIssue, onOpenPassive, onLogout }) {
                 className="px-4 py-2.5 rounded-2xl bg-indigo-800/60 hover:bg-indigo-800/80 text-white font-bold text-xs border border-white/20 transition-colors cursor-pointer"
               >
                 Enable Ride Roughness Logger
+              </button>
+              <button
+                type="button"
+                onClick={onOpenPitch}
+                className="px-4 py-2.5 rounded-2xl bg-slate-950/25 hover:bg-slate-950/40 text-white font-bold text-xs border border-white/30 transition-colors cursor-pointer"
+              >
+                Open Pitch Views
               </button>
             </div>
           </div>
@@ -471,23 +521,8 @@ function DeveloperHome({ onLogout }) {
           </h1>
 
           <p className="text-xs text-slate-500 leading-relaxed">
-            This space is prepared for the developer dashboard when that part of the project is implemented by your teammate (Person B).
+            This space is prepared for the developer dashboard when implemented by Person B.
           </p>
-
-          <div className="rounded-2xl bg-slate-50 p-4 border border-slate-200 text-xs text-left space-y-2">
-            <div className="flex justify-between">
-              <span className="text-slate-500">Pilot Township:</span>
-              <span className="font-bold text-slate-800">SS2, Petaling Jaya</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">Master Developer:</span>
-              <span className="font-bold text-slate-800">Sime Darby Property</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">Audit Status:</span>
-              <span className="font-bold text-emerald-600">Active Field Collection</span>
-            </div>
-          </div>
 
           <button
             type="button"
@@ -502,81 +537,707 @@ function DeveloperHome({ onLogout }) {
   );
 }
 
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [page, setPage] = useState('home');
-  const [issueType, setIssueType] = useState('ramp');
+// --- PERSON C INTEGRATED PITCH VIEW COMPONENT ---
+function IntegratedPitchView({ onBackToHome }) {
+  const [activeTab, setActiveTab] = useState('resident');
+  const [profile, setProfile] = useState('wheelchair');
+  const [issues, setIssues] = useState(INITIAL_MOCK_ISSUES);
+  const [selectedIssue, setSelectedIssue] = useState(INITIAL_MOCK_ISSUES[0]);
+  const [townshipRating] = useState({ badge: 'SILVER', percentage: 82 });
+  const [shopArrivals, setShopArrivals] = useState([]);
+  const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState('');
 
+  // VOICE DETECTOR STATES & AUDIO STREAM REFS
+  const [isListening, setIsListening] = useState(false);
+  const [voiceVolume, setVoiceVolume] = useState(0);
+  const [voiceLog, setVoiceLog] = useState('Voice Detection System ready.');
+
+  const audioContextRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const animFrameRef = useRef(null);
+
+  // LIVE COUNTDOWN TIMER TICKER
   useEffect(() => {
-    let alive = true;
-    const supabase = getSupabaseClient();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (alive && session?.user) setUser(session.user);
-      if (alive && !session?.user) setUser(null);
-    });
+    const timer = setInterval(() => {
+      setShopArrivals(prevArrivals =>
+        prevArrivals.map(arrival => {
+          if (arrival.secondsLeft > 0) {
+            const nextSec = arrival.secondsLeft - 1;
+            const mins = Math.floor(nextSec / 60);
+            const secs = nextSec % 60;
+            return {
+              ...arrival,
+              secondsLeft: nextSec,
+              etaFormatted: `${mins}:${secs < 10 ? '0' : ''}${secs}`
+            };
+          }
+          return arrival;
+        })
+      );
+    }, 1000);
 
-    async function restoreSession() {
-      try {
-        const { data } = await supabase.auth.getSession();
-        if (alive && data?.session?.user) {
-          setUser(data.session.user);
-        }
-      } catch {
-        // ignore
-      } finally {
-        if (alive) setAuthReady(true);
-      }
-    }
-    restoreSession();
-    return () => {
-      alive = false;
-      subscription.unsubscribe();
-    };
+    return () => clearInterval(timer);
   }, []);
 
-  function acceptSignedInUser(nextUser) {
-    setUser(nextUser);
-    setPage('home');
-  }
+  const triggerEmergencyAction = () => {
+    setEmergencyModalOpen(true);
+    setVoiceLog('🚨 Voice Peak Triggered: Emergency Signal Activated!');
+    if ('vibrate' in navigator) navigator.vibrate([300, 100, 300]);
+  };
 
-  async function logOut() {
+  const triggerReportAction = () => {
+    setVoiceLog('📝 Voice Command Triggered: Barrier Report Opened!');
+    setFeedbackMsg('✓ Voice Command: Barrier report triggered!');
+    setTimeout(() => setFeedbackMsg(''), 3000);
+    if ('vibrate' in navigator) navigator.vibrate(150);
+  };
+
+  // TIME-DOMAIN PEAK WAVAFORM ANALYZER
+  const startVoiceAudioAnalyzer = async () => {
     try {
-      await getSupabaseClient().auth.signOut();
-    } catch {
-      // ignore
-    } finally {
-      setUser(null);
-      setPage('home');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      mediaStreamRef.current = stream;
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = audioCtx;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+
+      const bufferLength = analyser.fftSize;
+      const dataArray = new Uint8Array(bufferLength);
+
+      let triggered = false;
+
+      const analyzeFrame = () => {
+        analyser.getByteTimeDomainData(dataArray);
+
+        let maxDeviation = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const deviation = Math.abs(dataArray[i] - 128);
+          if (deviation > maxDeviation) {
+            maxDeviation = deviation;
+          }
+        }
+
+        const peakVol = Math.min(100, Math.round((maxDeviation / 128) * 100));
+        setVoiceVolume(peakVol);
+
+        if (peakVol > 40 && !triggered) {
+          triggered = true;
+          triggerEmergencyAction();
+          setTimeout(() => { triggered = false; }, 3500);
+        }
+
+        animFrameRef.current = requestAnimationFrame(analyzeFrame);
+      };
+
+      analyzeFrame();
+      setIsListening(true);
+      setVoiceLog('Microphone listening... Speak or shout "Emergency" into mic.');
+    } catch (err) {
+      console.error('Microphone error:', err);
+      setIsListening(false);
+      setVoiceLog('Microphone access denied. Please allow mic in browser permissions.');
     }
+  };
+
+  const stopVoiceAudioAnalyzer = () => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    if (audioContextRef.current) audioContextRef.current.close();
+    setIsListening(false);
+    setVoiceVolume(0);
+    setVoiceLog('Voice detection stopped.');
+  };
+
+  const toggleVoiceAssistant = () => {
+    if (isListening) {
+      stopVoiceAudioAnalyzer();
+    } else {
+      startVoiceAudioAnalyzer();
+    }
+  };
+
+  const handleConfirmIssue = (id, isConfirm) => {
+    setIssues(prevIssues => 
+      prevIssues.map(issue => {
+        if (issue.id === id) {
+          const currentSev = issue.severity || 3;
+          const updatedSev = isConfirm ? Math.min(5, currentSev + 1) : Math.max(1, currentSev - 1);
+          const updatedStatus = isConfirm ? 'reported' : 'fixed';
+          
+          const updated = { 
+            ...issue, 
+            severity: updatedSev, 
+            status: updatedStatus 
+          };
+          
+          if (selectedIssue?.id === id) {
+            setSelectedIssue(updated);
+          }
+          return updated;
+        }
+        return issue;
+      })
+    );
+
+    setFeedbackMsg(
+      isConfirm 
+        ? '✓ Confirmed: Barrier is still active!' 
+        : '✓ Success: Barrier flagged as resolved!'
+    );
+    setTimeout(() => setFeedbackMsg(''), 3000);
+  };
+
+  const triggerShopArrival = () => {
+    if ('vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200]);
+    }
+
+    const newArrival = {
+      id: `arrival-${Date.now()}`,
+      residentName: 'Aishah (Opted-in Resident)',
+      profileType: 'Wheelchair User',
+      secondsLeft: 120,
+      etaFormatted: '2:00',
+      distance: '45m away',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    setShopArrivals(prev => [newArrival, ...prev]);
+  };
+
+  const handleAcknowledge = (id) => {
+    if ('vibrate' in navigator) {
+      navigator.vibrate(100);
+    }
+    setShopArrivals(prev => prev.filter(a => a.id !== id));
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-blue-500 selection:text-white">
+      
+      {/* Header Bar */}
+      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 sticky top-0 z-[100] px-4 py-3 shadow-xl">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
+          
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20">
+              <Accessibility className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-base tracking-tight text-white">MOVA</span>
+                <span className="bg-blue-500/20 text-blue-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-500/30">
+                  SIME DARBY
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 font-medium">Township Accessibility System</p>
+            </div>
+          </div>
+
+          <nav className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800/80 shadow-inner">
+            <button
+              onClick={() => setActiveTab('resident')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'resident'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Navigation className="w-3.5 h-3.5" />
+              <span>Resident View</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('shop')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'shop'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Store className="w-3.5 h-3.5" />
+              <span>Shopkeeper Monitor</span>
+              {shopArrivals.length > 0 && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('measure')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'measure'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <span>📏 Measure Ramp</span>
+            </button>
+
+            <button
+              onClick={onBackToHome}
+              className="text-xs font-bold text-slate-400 hover:text-white px-3 py-1.5 transition cursor-pointer"
+            >
+              ← Back Home
+            </button>
+          </nav>
+        </div>
+      </header>
+
+      {/* Main Pitch Views */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+        
+        {/* RESIDENT NAVIGATION VIEW */}
+        {activeTab === 'resident' && (
+          <div className="space-y-6">
+            <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between bg-slate-900/60 p-4 rounded-2xl border border-slate-800/80 shadow-sm">
+              <div className="space-y-1">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  1. Active Access Profile
+                </span>
+                <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                  <button
+                    onClick={() => setProfile('wheelchair')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      profile === 'wheelchair'
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Accessibility className="w-4 h-4" />
+                    <span>Wheelchair User</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setProfile('blind');
+                      startVoiceAudioAnalyzer();
+                    }}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      profile === 'blind'
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>Visually Impaired</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* REQUIREMENT #6: BADGE DISPLAY */}
+              <div className="flex items-center gap-3 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 p-3 rounded-xl border border-amber-500/30 shadow-lg">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center font-black text-sm border bg-slate-300/10 text-slate-200 border-slate-400/30">
+                  <Award className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-400">Township Rating:</span>
+                    <span className="text-xs font-black uppercase tracking-wider text-slate-300">
+                      {townshipRating.badge} ACCESSIBLE
+                    </span>
+                  </div>
+                  <p className="text-xs font-bold text-emerald-400 mt-0.5">
+                    {townshipRating.percentage}% Paths Verified Compliant
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* REAL MAP CONTAINER */}
+              <div className="lg:col-span-2 bg-slate-900 rounded-2xl border border-slate-800 p-2 flex flex-col justify-between relative overflow-hidden min-h-[440px] shadow-2xl">
+                
+                {/* REQUIREMENT #2: ROUTE WITH WARNINGS BANNER */}
+                <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl flex items-center justify-between text-amber-300 text-xs mb-2 font-semibold">
+                  <div className="flex items-center gap-2">
+                    <span>⚠️</span>
+                    <span>Reported blockage on your route: Commercial Lot 4 Entrance</span>
+                  </div>
+                  <span className="text-[10px] bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 text-amber-200 font-bold">
+                    ROUTE WARNING
+                  </span>
+                </div>
+
+                <div className="relative z-0 h-[380px] w-full rounded-xl overflow-hidden border border-slate-800">
+                  <MapContainer
+                    center={[3.0800, 101.4450]}
+                    zoom={16}
+                    scrollWheelZoom={true}
+                    style={{ height: '100%', width: '100%' }}
+                  >
+                    <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    {issues.map((issue) => (
+                      <Marker
+                        key={issue.id}
+                        position={[issue.lat, issue.lng]}
+                        icon={selectedIssue?.id === issue.id ? activeIcon : defaultIcon}
+                        eventHandlers={{
+                          click: () => setSelectedIssue(issue),
+                        }}
+                      >
+                        <Popup>
+                          <div className="text-xs font-sans text-slate-900 font-bold">
+                            <p className="capitalize text-blue-600">{issue.type} Issue</p>
+                            <p className="text-[10px] text-slate-600">{issue.location_name}</p>
+                            <p className="text-[10px] text-slate-500">Slope: {issue.slope_degrees}°</p>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    ))}
+                  </MapContainer>
+                </div>
+
+                <div className="relative z-10 bg-slate-950/90 backdrop-blur-md p-3 mt-2 rounded-xl border border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Location: Bandar Bukit Raja Townpark Path</span>
+                  </div>
+                  <span className="text-[11px] font-mono text-slate-500">Live GPS Connected</span>
+                </div>
+              </div>
+
+              {/* DETAILS PANEL, VOICE CONTROL & SAFETY LAYER */}
+              <div className="space-y-6">
+                
+                {/* VOICE CONTROL WITH PEAK AMPLITUDE METER */}
+                <div className="bg-slate-900 border-2 border-indigo-500/40 p-5 rounded-2xl shadow-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                      <Volume2 className="w-4 h-4 text-indigo-400" />
+                      <span>Time-Domain Voice Waveform Analyzer</span>
+                    </h3>
+                    {isListening && (
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30 animate-pulse">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        Live Stream Active
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Peak waveform analyzer. Speak or shout <strong className="text-white">"Emergency"</strong> directly into mic.
+                  </p>
+
+                  {isListening && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>Voice Peak Amplitude:</span>
+                        <span className="text-emerald-400 font-bold">{voiceVolume}%</span>
+                      </div>
+                      <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                        <div 
+                          className={`h-full transition-all duration-75 ${voiceVolume > 40 ? 'bg-red-500' : 'bg-emerald-400'}`}
+                          style={{ width: `${voiceVolume}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={toggleVoiceAssistant}
+                    className={`w-full font-extrabold py-3.5 rounded-xl border text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md ${
+                      isListening
+                        ? 'bg-red-600 text-white border-red-400 animate-pulse'
+                        : 'bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border-indigo-500/50'
+                    }`}
+                  >
+                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-indigo-400" />}
+                    <span>{isListening ? 'Stop Voice Detection' : 'Activate Live Voice Detection'}</span>
+                  </button>
+
+                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 block">
+                      Instant Command Triggers:
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={triggerEmergencyAction}
+                        className="bg-red-950/60 hover:bg-red-900/80 text-red-300 border border-red-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
+                      >
+                        🗣 "Emergency"
+                      </button>
+                      <button
+                        type="button"
+                        onClick={triggerReportAction}
+                        className="bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
+                      >
+                        🗣 "Report barrier"
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-[10px] font-mono text-indigo-400 font-bold">
+                    {voiceLog}
+                  </div>
+                </div>
+
+                {/* REQUIREMENT #3 & REQUIREMENT #4: VERIFIED RAMP DETAILS & COMPANION SUGGESTION */}
+                {selectedIssue && (
+                  <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl space-y-4">
+                    <div className="flex justify-between items-start border-b border-slate-800 pb-3">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                          Selected Micro-Path Detail
+                        </span>
+                        <h3 className="text-base font-extrabold text-white capitalize mt-0.5">
+                          {selectedIssue.type} Issue
+                        </h3>
+                      </div>
+                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
+                        selectedIssue.status === 'fixed' 
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
+                          : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                      }`}>
+                        {selectedIssue.status}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2 text-xs text-slate-300 font-medium">
+                      <p><span className="text-slate-500">Location:</span> {selectedIssue.location_name}</p>
+                      <p><span className="text-slate-500">Gradient Measurement:</span> <strong className="text-white font-mono">{selectedIssue.slope_degrees}°</strong> (Standard: ≤ 4.8°)</p>
+                      <p><span className="text-slate-500">Handrail Present:</span> {selectedIssue.handrail ? 'Yes' : 'No (Non-Compliant)'}</p>
+                    </div>
+
+                    {/* REQUIREMENT #4: COMPANION SUGGESTION */}
+                    {selectedIssue.slope_degrees > 4.8 && (
+                      <div className="bg-rose-950/40 border border-rose-500/40 p-3 rounded-xl text-xs text-rose-300 font-bold flex items-center gap-2">
+                        <span>💡</span>
+                        <span>Companion suggestion: This ramp is steep, consider going with someone.</span>
+                      </div>
+                    )}
+
+                    {/* REQUIREMENT #5: ONE-TAP CONFIRM OR FLAG */}
+                    <div className="space-y-2 pt-2 border-t border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-400 block">
+                          One-Tap Community Verification:
+                        </span>
+                        {feedbackMsg && (
+                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40 animate-pulse">
+                            {feedbackMsg}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmIssue(selectedIssue.id, true)}
+                          className="bg-emerald-600/30 hover:bg-emerald-600/50 active:scale-95 border border-emerald-500/60 text-emerald-300 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Still Exists</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmIssue(selectedIssue.id, false)}
+                          className="bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-600 text-slate-200 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5 text-slate-300" />
+                          <span>Flag Fixed</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* REQUIREMENT #8: EMERGENCY BUTTON FOR BLIND USERS */}
+                <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl space-y-3">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 text-red-500" />
+                      <span>Visually Impaired Safety Layer</span>
+                    </h3>
+                  </div>
+
+                  <button
+                    onClick={() => setEmergencyModalOpen(true)}
+                    aria-label="Emergency assistance button, test mode to alert 999"
+                    className="w-full bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white font-black py-4 rounded-xl shadow-lg shadow-red-600/30 text-sm tracking-wider uppercase border-2 border-red-400 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <PhoneCall className="w-5 h-5 animate-bounce" />
+                    <span>Emergency Assistance (999 Test Mode)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* REQUIREMENT #7: SHOP OWNER ALERT */}
+        {activeTab === 'shop' && (
+          <div className="max-w-3xl mx-auto space-y-6">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-extrabold text-white">Shopkeeper Assistance Monitor</h2>
+                <p className="text-xs text-slate-400 mt-1">Lot 12 - Bandar Bukit Raja Commercial Center</p>
+              </div>
+              <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                Vibration & Live Timer Active
+              </span>
+            </div>
+
+            <div className="space-y-4">
+              {shopArrivals.length === 0 ? (
+                <div className="bg-slate-900/60 border border-slate-800 border-dashed p-12 text-center rounded-2xl space-y-3">
+                  <Store className="w-10 h-10 text-slate-600 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-400">No approaching visitors right now.</p>
+                  <button
+                    type="button"
+                    onClick={triggerShopArrival}
+                    className="mt-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/40 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer active:scale-95 transition"
+                  >
+                    Simulate Resident Arrival (Wheelchair user arriving, please open door)
+                  </button>
+                </div>
+              ) : (
+                shopArrivals.map(arrival => (
+                  <div key={arrival.id} className="bg-slate-900 border border-blue-500/40 p-5 rounded-2xl shadow-xl flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 shrink-0">
+                        <Accessibility className="w-7 h-7 animate-pulse" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-white">{arrival.profileType} Arriving</h4>
+                          <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-amber-400 animate-spin" />
+                            ETA: {arrival.secondsLeft > 0 ? arrival.etaFormatted : 'Arriving Now!'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 mt-1 font-medium">
+                          Distance: {arrival.distance} • Wheelchair user arriving, please open the door.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleAcknowledge(arrival.id)}
+                      className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs px-4 py-2.5 rounded-xl cursor-pointer transition shadow-md shrink-0"
+                    >
+                      Acknowledge & Accept
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* MEASURE RAMP (PERSON A) */}
+        {activeTab === 'measure' && (
+          <div className="max-w-2xl mx-auto bg-slate-900 p-6 rounded-2xl border border-slate-800">
+            <TiltMeter />
+          </div>
+        )}
+      </main>
+
+      {/* Emergency Modal */}
+      {emergencyModalOpen && (
+        <div className="fixed inset-0 z-[200] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border-2 border-red-500 p-6 rounded-2xl max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex justify-between items-start">
+              <div className="flex items-center gap-2 text-red-500">
+                <ShieldAlert className="w-6 h-6 animate-pulse" />
+                <h3 className="text-lg font-black tracking-wide uppercase">Emergency Signal Sent</h3>
+              </div>
+              <button onClick={() => setEmergencyModalOpen(false)} className="text-slate-500 hover:text-white font-bold p-1 cursor-pointer">✕</button>
+            </div>
+            <p className="text-xs text-slate-300">
+              [DEMO TEST MODE] GPS Coordinates logged: <strong className="text-white font-mono">3.0810, 101.4465</strong>. Dialing 999 simulated safely.
+            </p>
+            <button
+              onClick={() => setEmergencyModalOpen(false)}
+              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs py-2.5 rounded-xl cursor-pointer"
+            >
+              Close Test Modal
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [currentScreen, setCurrentScreen] = useState('home');
+  const [selectedIssueType, setSelectedIssueType] = useState('ramp');
+
+  const handleLogout = () => {
+    setUser(null);
+    setCurrentScreen('home');
+  };
+
+  if (!user) {
+    return <AuthPage onSignedIn={(userData) => setUser(userData)} />;
   }
 
-  if (!authReady) {
+  const userRole = user?.user_metadata?.role || 'resident';
+
+  if (userRole === 'developer') {
+    return <DeveloperHome onLogout={handleLogout} />;
+  }
+
+  if (currentScreen === 'pitch') {
+    return <IntegratedPitchView onBackToHome={() => setCurrentScreen('home')} />;
+  }
+
+  if (currentScreen === 'passive') {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-50 text-slate-600">
-        <p className="text-sm font-semibold flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-pulse" />
-          Loading MOVA…
-        </p>
-      </main>
+      <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-left">
+        <div className="max-w-xl mx-auto space-y-4">
+          <button
+            onClick={() => setCurrentScreen('home')}
+            className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl border border-indigo-200 cursor-pointer"
+          >
+            ← Back to Resident Home
+          </button>
+          <MotionLogger />
+        </div>
+      </div>
     );
   }
 
-  if (!user) return <AuthPage onSignedIn={acceptSignedInUser} />;
-
-  const role = user.user_metadata?.role === 'developer' ? 'developer' : 'resident';
-  if (role === 'developer') return <DeveloperHome onLogout={logOut} />;
-  if (page === 'report') return <ReportForm key={issueType} initialIssueType={issueType} onBackToDashboard={() => setPage('home')} />;
-  if (page === 'passive') return <MotionLogger onBackToHome={() => setPage('home')} onLogout={logOut} />;
+  if (currentScreen === 'report') {
+    return (
+      <div className="min-h-screen bg-slate-50 p-4 sm:p-6 text-left">
+        <div className="max-w-xl mx-auto space-y-4">
+          <button
+            onClick={() => setCurrentScreen('home')}
+            className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl border border-indigo-200 cursor-pointer"
+          >
+            ← Back to Resident Home
+          </button>
+          <ReportForm issueType={selectedIssueType} onCancel={() => setCurrentScreen('home')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ResidentHome
-      onChooseIssue={(nextType) => {
-        setIssueType(nextType);
-        setPage('report');
+      onChooseIssue={(issueType) => {
+        setSelectedIssueType(issueType);
+        setCurrentScreen('report');
       }}
-      onOpenPassive={() => setPage('passive')}
-      onLogout={logOut}
+      onOpenPassive={() => setCurrentScreen('passive')}
+      onOpenPitch={() => setCurrentScreen('pitch')}
+      onLogout={handleLogout}
     />
   );
 }
