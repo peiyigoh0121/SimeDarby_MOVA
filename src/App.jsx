@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 import ReportForm from './ReportForm.jsx';
 import MotionLogger from './MotionLogger.jsx';
-import TiltMeter from './TiltMeter.jsx';
 import { 
   ArrowRight, 
   Building, 
@@ -111,10 +110,10 @@ const INITIAL_MOCK_ISSUES = [
   {
     id: 'mock-1',
     type: 'ramp',
-    lat: 3.0810,
-    lng: 101.4465,
+    lat: 3.1191,
+    lng: 101.6197,
     slope_degrees: 8.5,
-    location_name: 'Commercial Lot 4 Entrance, Bandar Bukit Raja',
+    location_name: 'SS2 commercial area, Petaling Jaya',
     severity: 4,
     status: 'reported',
     handrail: false,
@@ -123,10 +122,10 @@ const INITIAL_MOCK_ISSUES = [
   {
     id: 'mock-2',
     type: 'blocked paving',
-    lat: 3.0795,
-    lng: 101.4442,
+    lat: 3.1172,
+    lng: 101.6190,
     slope_degrees: 0,
-    location_name: 'Pusat Bandar Bus Stop, Bandar Bukit Raja',
+    location_name: 'SS2 pedestrian crossing, Petaling Jaya',
     severity: 3,
     status: 'reported',
     handrail: true,
@@ -135,10 +134,10 @@ const INITIAL_MOCK_ISSUES = [
   {
     id: 'mock-3',
     type: 'broken paving',
-    lat: 3.0785,
-    lng: 101.4430,
+    lat: 3.1187,
+    lng: 101.6221,
     slope_degrees: 0,
-    location_name: 'Townpark Pedestrian Path',
+    location_name: 'SS2 walkway, Petaling Jaya',
     severity: 2,
     status: 'fixed',
     handrail: true,
@@ -182,6 +181,11 @@ function AuthPage({ onSignedIn }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('resident');
+  const [hasShop, setHasShop] = useState(false);
+  const [shopName, setShopName] = useState('');
+  const [shopAddress, setShopAddress] = useState('');
+  const [shopType, setShopType] = useState('');
+  const [shopContact, setShopContact] = useState('');
   const isSignup = mode === 'signup';
 
   function submitAuth(e) {
@@ -189,15 +193,29 @@ function AuthPage({ onSignedIn }) {
     onSignedIn({
       id: 'usr_' + role,
       email: email || `${role}@ss2.mova.my`,
-      user_metadata: { role },
+      user_metadata: {
+        role,
+        shopOwner: role === 'resident' && hasShop,
+        ...(role === 'resident' && hasShop && isSignup
+          ? { shop: { name: shopName, address: shopAddress, type: shopType, contact: shopContact } }
+          : {}),
+      },
     });
   }
 
   function handleQuickDemo(targetRole) {
+    const isShopOwnerDemo = targetRole === 'shop_owner';
+    const accountRole = isShopOwnerDemo ? 'resident' : targetRole;
     onSignedIn({
       id: 'demo_' + targetRole,
       email: `${targetRole}@ss2.mova.my`,
-      user_metadata: { role: targetRole },
+      user_metadata: {
+        role: accountRole,
+        shopOwner: isShopOwnerDemo,
+        ...(isShopOwnerDemo
+          ? { shop: { name: 'SS2 Demo Cafe', address: 'SS2 Commercial Area, Petaling Jaya', type: 'Cafe', contact: '012-345 6789' } }
+          : {}),
+      },
     });
   }
 
@@ -232,7 +250,7 @@ function AuthPage({ onSignedIn }) {
               {isSignup ? 'Create your account' : 'Welcome back'}
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              {isSignup ? 'Choose your role to join MOVA.' : 'Sign in to report or review township barriers.'}
+              {isSignup ? 'Every resident can use the accessibility tools. Shop owners can add a monitor for their business.' : 'Sign in to report or review township barriers.'}
             </p>
           </div>
 
@@ -241,7 +259,7 @@ function AuthPage({ onSignedIn }) {
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
               1-Click Demo Testing:
             </span>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <button
                 type="button"
                 onClick={() => handleQuickDemo('resident')}
@@ -249,6 +267,14 @@ function AuthPage({ onSignedIn }) {
               >
                 <User className="w-3.5 h-3.5 text-indigo-600" />
                 <span>Demo Resident</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickDemo('shop_owner')}
+                className="py-2.5 px-3 rounded-xl bg-white hover:bg-slate-50 border border-emerald-200 text-emerald-800 font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+              >
+                <Store className="w-3.5 h-3.5 text-emerald-700" />
+                <span>Demo Resident · Shop Owner</span>
               </button>
               <button
                 type="button"
@@ -276,6 +302,95 @@ function AuthPage({ onSignedIn }) {
                 <option value="developer">Developer</option>
               </select>
             </div>
+          )}
+
+          {isSignup && role === 'resident' && (
+            <fieldset className="space-y-2 rounded-2xl border border-slate-200 p-4">
+              <legend className="px-1 text-xs font-bold text-slate-800">Do you own a shop?</legend>
+              <p className="text-[11px] text-slate-500">This is optional. Shop owners keep all resident features and also get the Shopkeeper Monitor.</p>
+              <div className="flex gap-3">
+                {[
+                  { value: false, label: 'No' },
+                  { value: true, label: 'Yes' },
+                ].map((option) => (
+                  <label key={option.label} className="flex flex-1 cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700">
+                    <input
+                      type="radio"
+                      name="has-shop"
+                      checked={hasShop === option.value}
+                      onChange={() => setHasShop(option.value)}
+                      className="accent-indigo-600"
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {isSignup && role === 'resident' && hasShop && (
+            <section className="space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Shop details</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">These details identify your shop in the assistance monitor.</p>
+              </div>
+              <div>
+                <label htmlFor="shop-name" className="mb-1.5 block text-xs font-bold text-slate-700">Shop name</label>
+                <input
+                  id="shop-name"
+                  type="text"
+                  required
+                  autoComplete="organization"
+                  placeholder="e.g. SS2 Corner Cafe"
+                  value={shopName}
+                  onChange={(e) => setShopName(e.target.value)}
+                  className="w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                />
+              </div>
+              <div>
+                <label htmlFor="shop-address" className="mb-1.5 block text-xs font-bold text-slate-700">Shop address or lot location</label>
+                <input
+                  id="shop-address"
+                  type="text"
+                  required
+                  autoComplete="street-address"
+                  placeholder="Street, lot or landmark in SS2"
+                  value={shopAddress}
+                  onChange={(e) => setShopAddress(e.target.value)}
+                  className="w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                />
+              </div>
+              <div>
+                <label htmlFor="shop-type" className="mb-1.5 block text-xs font-bold text-slate-700">Shop type</label>
+                <select
+                  id="shop-type"
+                  required
+                  value={shopType}
+                  onChange={(e) => setShopType(e.target.value)}
+                  className="w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                >
+                  <option value="" disabled>Select a shop type</option>
+                  <option value="Cafe">Cafe or restaurant</option>
+                  <option value="Retail">Retail shop</option>
+                  <option value="Grocery">Grocery or convenience store</option>
+                  <option value="Services">Personal or professional services</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="shop-contact" className="mb-1.5 block text-xs font-bold text-slate-700">Contact number</label>
+                <input
+                  id="shop-contact"
+                  type="tel"
+                  required
+                  autoComplete="tel"
+                  placeholder="e.g. 012-345 6789"
+                  value={shopContact}
+                  onChange={(e) => setShopContact(e.target.value)}
+                  className="w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                />
+              </div>
+            </section>
           )}
 
           <div>
@@ -352,9 +467,10 @@ function IssueCard({ title, detail, icon, color, badge, onClick }) {
       : 'bg-blue-50 text-blue-700 border-blue-200';
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
-      className="group rounded-3xl bg-white p-5 shadow-xs border border-slate-200/90 hover:border-indigo-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-3"
+      className="group w-full rounded-3xl bg-white p-5 text-left shadow-xs border border-slate-200/90 hover:border-indigo-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-3"
     >
       <div>
         <div className="flex items-center justify-between">
@@ -379,7 +495,52 @@ function IssueCard({ title, detail, icon, color, badge, onClick }) {
       <div className="pt-2 border-t border-slate-100 flex items-center text-xs font-bold text-indigo-600">
         <span>Open report flow &rarr;</span>
       </div>
-    </div>
+    </button>
+  );
+}
+
+function IssuePicker({ onChooseIssue, onBackToMap, onLogout }) {
+  return (
+    <main className="min-h-screen bg-slate-50 pb-16 text-left text-slate-900">
+      <BrandHeader onLogout={onLogout} />
+
+      <div className="mx-auto max-w-5xl space-y-5 px-4 sm:px-6">
+        <button
+          type="button"
+          onClick={onBackToMap}
+          className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100"
+        >
+          ← Back to SS2 Map
+        </button>
+
+        <section className="space-y-1">
+          <h1 className="text-2xl font-black tracking-tight text-slate-900">What barrier did you encounter?</h1>
+          <p className="text-sm text-slate-500">Choose an issue to open its matching report form and tools.</p>
+        </section>
+
+        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+          <IssueCard
+            title="Steep or broken ramp"
+            detail="Measure ramp slope with your phone gyroscope and check it against the MS 1184 standard."
+            icon="♿"
+            color="blue"
+            badge="RAMP SENSOR"
+            onClick={() => onChooseIssue('ramp')}
+          />
+          {REPORT_ISSUES.map((issue) => (
+            <IssueCard
+              key={issue.type}
+              title={issue.title}
+              detail={issue.detail}
+              icon={issue.icon}
+              color={issue.color}
+              badge={issue.badge}
+              onClick={() => onChooseIssue(issue.type)}
+            />
+          ))}
+        </div>
+      </div>
+    </main>
   );
 }
 
@@ -538,7 +699,7 @@ function DeveloperHome({ onLogout }) {
 }
 
 // --- PERSON C INTEGRATED PITCH VIEW COMPONENT ---
-function IntegratedPitchView({ onBackToHome }) {
+function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwner, shopDetails }) {
   const [activeTab, setActiveTab] = useState('resident');
   const [profile, setProfile] = useState('wheelchair');
   const [issues, setIssues] = useState(INITIAL_MOCK_ISSUES);
@@ -556,6 +717,14 @@ function IntegratedPitchView({ onBackToHome }) {
   const audioContextRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const animFrameRef = useRef(null);
+
+  useEffect(() => () => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach(track => track.stop());
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close();
+    }
+  }, []);
 
   // LIVE COUNTDOWN TIMER TICKER
   useEffect(() => {
@@ -595,12 +764,17 @@ function IntegratedPitchView({ onBackToHome }) {
 
   // TIME-DOMAIN PEAK WAVAFORM ANALYZER
   const startVoiceAudioAnalyzer = async () => {
+    if (isListening) return;
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone access is not supported by this browser.');
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       mediaStreamRef.current = stream;
 
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioContextRef.current = audioCtx;
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
 
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
@@ -611,25 +785,25 @@ function IntegratedPitchView({ onBackToHome }) {
       const dataArray = new Uint8Array(bufferLength);
 
       let triggered = false;
+      let sustainedPeakFrames = 0;
 
       const analyzeFrame = () => {
         analyser.getByteTimeDomainData(dataArray);
 
-        let maxDeviation = 0;
+        let sumSquares = 0;
         for (let i = 0; i < bufferLength; i++) {
-          const deviation = Math.abs(dataArray[i] - 128);
-          if (deviation > maxDeviation) {
-            maxDeviation = deviation;
-          }
+          const sample = (dataArray[i] - 128) / 128;
+          sumSquares += sample * sample;
         }
 
-        const peakVol = Math.min(100, Math.round((maxDeviation / 128) * 100));
+        const peakVol = Math.min(100, Math.round(Math.sqrt(sumSquares / bufferLength) * 220));
         setVoiceVolume(peakVol);
 
-        if (peakVol > 40 && !triggered) {
+        sustainedPeakFrames = peakVol > 40 ? sustainedPeakFrames + 1 : 0;
+        if (sustainedPeakFrames >= 4 && !triggered) {
           triggered = true;
           triggerEmergencyAction();
-          setTimeout(() => { triggered = false; }, 3500);
+          window.setTimeout(() => { triggered = false; }, 3500);
         }
 
         animFrameRef.current = requestAnimationFrame(analyzeFrame);
@@ -640,8 +814,18 @@ function IntegratedPitchView({ onBackToHome }) {
       setVoiceLog('Microphone listening... Speak or shout "Emergency" into mic.');
     } catch (err) {
       console.error('Microphone error:', err);
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
       setIsListening(false);
-      setVoiceLog('Microphone access denied. Please allow mic in browser permissions.');
+      setVoiceLog(err instanceof Error && err.message.includes('not supported')
+        ? err.message
+        : 'Microphone access denied. Allow mic access and try again.');
     }
   };
 
@@ -650,7 +834,7 @@ function IntegratedPitchView({ onBackToHome }) {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
     }
-    if (audioContextRef.current) audioContextRef.current.close();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') audioContextRef.current.close();
     setIsListening(false);
     setVoiceVolume(0);
     setVoiceLog('Voice detection stopped.');
@@ -665,19 +849,19 @@ function IntegratedPitchView({ onBackToHome }) {
   };
 
   const handleConfirmIssue = (id, isConfirm) => {
-    setIssues(prevIssues => 
+    setIssues(prevIssues =>
       prevIssues.map(issue => {
         if (issue.id === id) {
           const currentSev = issue.severity || 3;
           const updatedSev = isConfirm ? Math.min(5, currentSev + 1) : Math.max(1, currentSev - 1);
           const updatedStatus = isConfirm ? 'reported' : 'fixed';
-          
-          const updated = { 
-            ...issue, 
-            severity: updatedSev, 
-            status: updatedStatus 
+
+          const updated = {
+            ...issue,
+            severity: updatedSev,
+            status: updatedStatus
           };
-          
+
           if (selectedIssue?.id === id) {
             setSelectedIssue(updated);
           }
@@ -688,8 +872,8 @@ function IntegratedPitchView({ onBackToHome }) {
     );
 
     setFeedbackMsg(
-      isConfirm 
-        ? '✓ Confirmed: Barrier is still active!' 
+      isConfirm
+        ? '✓ Confirmed: Barrier is still active!'
         : '✓ Success: Barrier flagged as resolved!'
     );
     setTimeout(() => setFeedbackMsg(''), 3000);
@@ -720,94 +904,110 @@ function IntegratedPitchView({ onBackToHome }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-blue-500 selection:text-white">
-      
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col selection:bg-blue-500 selection:text-white">
+
       {/* Header Bar */}
-      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 sticky top-0 z-[100] px-4 py-3 shadow-xl">
+      <header className="bg-white/90 backdrop-blur-md border-b border-slate-200 sticky top-0 z-[100] px-4 py-3 shadow-sm">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
-          
+
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20">
               <Accessibility className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-base tracking-tight text-white">MOVA</span>
-                <span className="bg-blue-500/20 text-blue-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-500/30">
+                <span className="font-extrabold text-base tracking-tight text-slate-900">MOVA</span>
+                <span className="bg-blue-500/20 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-500/30">
                   SIME DARBY
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 font-medium">Township Accessibility System</p>
+              <p className="text-[11px] text-slate-500 font-medium">Township Accessibility System</p>
             </div>
           </div>
 
-          <nav className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800/80 shadow-inner">
+          <nav className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
             <button
               onClick={() => setActiveTab('resident')}
               className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'resident'
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-white'
               }`}
             >
               <Navigation className="w-3.5 h-3.5" />
-              <span>Resident View</span>
+              <span>SS2 Resident Map</span>
             </button>
 
-            <button
-              onClick={() => setActiveTab('shop')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'shop'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <Store className="w-3.5 h-3.5" />
-              <span>Shopkeeper Monitor</span>
-              {shopArrivals.length > 0 && (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              )}
-            </button>
+            {isShopOwner && (
+              <button
+                onClick={() => setActiveTab('shop')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === 'shop'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-white'
+                }`}
+              >
+                <Store className="w-3.5 h-3.5" />
+                <span>Shopkeeper Monitor</span>
+                {shopArrivals.length > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                )}
+              </button>
+            )}
 
             <button
-              onClick={() => setActiveTab('measure')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'measure'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
+              type="button"
+              onClick={onLogout}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-white hover:text-slate-900"
             >
-              <span>📏 Measure Ramp</span>
+              <LogOut className="h-3.5 w-3.5" />
+              <span>Log out</span>
             </button>
 
-            <button
-              onClick={onBackToHome}
-              className="text-xs font-bold text-slate-400 hover:text-white px-3 py-1.5 transition cursor-pointer"
-            >
-              ← Back Home
-            </button>
           </nav>
         </div>
       </header>
 
       {/* Main Pitch Views */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
-        
+        <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-lg font-extrabold text-slate-900">SS2 Accessibility Map</h1>
+            <p className="mt-0.5 text-xs text-slate-500">Explore reported barriers and choose what you need to do.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenReport}
+              className="rounded-xl bg-indigo-600 px-3.5 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700"
+            >
+              Report a Barrier
+            </button>
+            <button
+              type="button"
+              onClick={onOpenPassive}
+              className="rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-700 transition hover:bg-indigo-100"
+            >
+              Passive Detection
+            </button>
+          </div>
+        </div>
+
         {/* RESIDENT NAVIGATION VIEW */}
         {activeTab === 'resident' && (
           <div className="space-y-6">
-            <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between bg-slate-900/60 p-4 rounded-2xl border border-slate-800/80 shadow-sm">
+            <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
               <div className="space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
                   1. Active Access Profile
                 </span>
-                <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button
                     onClick={() => setProfile('wheelchair')}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                       profile === 'wheelchair'
                         ? 'bg-blue-600 text-white shadow-md'
-                        : 'text-slate-400 hover:text-slate-200'
+                        : 'text-slate-500 hover:text-slate-700'
                     }`}
                   >
                     <Accessibility className="w-4 h-4" />
@@ -822,7 +1022,7 @@ function IntegratedPitchView({ onBackToHome }) {
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                       profile === 'blind'
                         ? 'bg-indigo-600 text-white shadow-md'
-                        : 'text-slate-400 hover:text-slate-200'
+                        : 'text-slate-500 hover:text-slate-700'
                     }`}
                   >
                     <Eye className="w-4 h-4" />
@@ -832,18 +1032,18 @@ function IntegratedPitchView({ onBackToHome }) {
               </div>
 
               {/* REQUIREMENT #6: BADGE DISPLAY */}
-              <div className="flex items-center gap-3 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 p-3 rounded-xl border border-amber-500/30 shadow-lg">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center font-black text-sm border bg-slate-300/10 text-slate-200 border-slate-400/30">
+              <div className="flex items-center gap-3 bg-gradient-to-r from-white via-slate-50 to-white p-3 rounded-xl border border-amber-500/30 shadow-lg">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center font-black text-sm border bg-slate-300/10 text-slate-700 border-slate-400/30">
                   <Award className="w-6 h-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-400">Township Rating:</span>
-                    <span className="text-xs font-black uppercase tracking-wider text-slate-300">
+                    <span className="text-xs font-semibold text-slate-500">Township Rating:</span>
+                    <span className="text-xs font-black uppercase tracking-wider text-slate-700">
                       {townshipRating.badge} ACCESSIBLE
                     </span>
                   </div>
-                  <p className="text-xs font-bold text-emerald-400 mt-0.5">
+                  <p className="text-xs font-bold text-emerald-700 mt-0.5">
                     {townshipRating.percentage}% Paths Verified Compliant
                   </p>
                 </div>
@@ -851,24 +1051,24 @@ function IntegratedPitchView({ onBackToHome }) {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
+
               {/* REAL MAP CONTAINER */}
-              <div className="lg:col-span-2 bg-slate-900 rounded-2xl border border-slate-800 p-2 flex flex-col justify-between relative overflow-hidden min-h-[440px] shadow-2xl">
-                
+              <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-2 flex flex-col justify-between relative overflow-hidden min-h-[440px] shadow-lg">
+
                 {/* REQUIREMENT #2: ROUTE WITH WARNINGS BANNER */}
-                <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl flex items-center justify-between text-amber-300 text-xs mb-2 font-semibold">
+                <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl flex items-center justify-between text-amber-800 text-xs mb-2 font-semibold">
                   <div className="flex items-center gap-2">
                     <span>⚠️</span>
                     <span>Reported blockage on your route: Commercial Lot 4 Entrance</span>
                   </div>
-                  <span className="text-[10px] bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 text-amber-200 font-bold">
+                  <span className="text-[10px] bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 text-amber-800 font-bold">
                     ROUTE WARNING
                   </span>
                 </div>
 
-                <div className="relative z-0 h-[380px] w-full rounded-xl overflow-hidden border border-slate-800">
+                <div className="relative z-0 h-[380px] w-full rounded-xl overflow-hidden border border-slate-200">
                   <MapContainer
-                    center={[3.0800, 101.4450]}
+                    center={[3.11806, 101.62083]}
                     zoom={16}
                     scrollWheelZoom={true}
                     style={{ height: '100%', width: '100%' }}
@@ -889,7 +1089,7 @@ function IntegratedPitchView({ onBackToHome }) {
                         <Popup>
                           <div className="text-xs font-sans text-slate-900 font-bold">
                             <p className="capitalize text-blue-600">{issue.type} Issue</p>
-                            <p className="text-[10px] text-slate-600">{issue.location_name}</p>
+                            <p className="text-[10px] text-slate-500">{issue.location_name}</p>
                             <p className="text-[10px] text-slate-500">Slope: {issue.slope_degrees}°</p>
                           </div>
                         </Popup>
@@ -898,10 +1098,10 @@ function IntegratedPitchView({ onBackToHome }) {
                   </MapContainer>
                 </div>
 
-                <div className="relative z-10 bg-slate-950/90 backdrop-blur-md p-3 mt-2 rounded-xl border border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                <div className="relative z-10 bg-white/95 backdrop-blur-md p-3 mt-2 rounded-xl border border-slate-200 flex items-center justify-between text-xs text-slate-500">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Location: Bandar Bukit Raja Townpark Path</span>
+                    <span>Location: SS2, Petaling Jaya</span>
                   </div>
                   <span className="text-[11px] font-mono text-slate-500">Live GPS Connected</span>
                 </div>
@@ -909,34 +1109,34 @@ function IntegratedPitchView({ onBackToHome }) {
 
               {/* DETAILS PANEL, VOICE CONTROL & SAFETY LAYER */}
               <div className="space-y-6">
-                
+
                 {/* VOICE CONTROL WITH PEAK AMPLITUDE METER */}
-                <div className="bg-slate-900 border-2 border-indigo-500/40 p-5 rounded-2xl shadow-xl space-y-3">
+                <div className="bg-white border-2 border-indigo-500/40 p-5 rounded-2xl shadow-md space-y-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
-                      <Volume2 className="w-4 h-4 text-indigo-400" />
+                    <h3 className="text-xs font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-2">
+                      <Volume2 className="w-4 h-4 text-indigo-700" />
                       <span>Time-Domain Voice Waveform Analyzer</span>
                     </h3>
                     {isListening && (
-                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30 animate-pulse">
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-500/30 animate-pulse">
                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                         Live Stream Active
                       </span>
                     )}
                   </div>
 
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Peak waveform analyzer. Speak or shout <strong className="text-white">"Emergency"</strong> directly into mic.
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Peak waveform analyzer. Speak or shout <strong className="text-slate-900">"Emergency"</strong> directly into mic.
                   </p>
 
                   {isListening && (
                     <div className="space-y-1">
-                      <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                      <div className="flex justify-between text-[10px] font-mono text-slate-500">
                         <span>Voice Peak Amplitude:</span>
-                        <span className="text-emerald-400 font-bold">{voiceVolume}%</span>
+                        <span className="text-emerald-700 font-bold">{voiceVolume}%</span>
                       </div>
-                      <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
-                        <div 
+                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden border border-slate-200">
+                        <div
                           className={`h-full transition-all duration-75 ${voiceVolume > 40 ? 'bg-red-500' : 'bg-emerald-400'}`}
                           style={{ width: `${voiceVolume}%` }}
                         />
@@ -950,83 +1150,83 @@ function IntegratedPitchView({ onBackToHome }) {
                     className={`w-full font-extrabold py-3.5 rounded-xl border text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md ${
                       isListening
                         ? 'bg-red-600 text-white border-red-400 animate-pulse'
-                        : 'bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border-indigo-500/50'
+                        : 'bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-700 border-indigo-500/50'
                     }`}
                   >
-                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-indigo-400" />}
+                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-indigo-700" />}
                     <span>{isListening ? 'Stop Voice Detection' : 'Activate Live Voice Detection'}</span>
                   </button>
 
-                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                    <span className="text-[10px] font-bold text-slate-400 block">
+                  <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-500 block">
                       Instant Command Triggers:
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         onClick={triggerEmergencyAction}
-                        className="bg-red-950/60 hover:bg-red-900/80 text-red-300 border border-red-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
+                        className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
                       >
                         🗣 "Emergency"
                       </button>
                       <button
                         type="button"
                         onClick={triggerReportAction}
-                        className="bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
+                        className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
                       >
                         🗣 "Report barrier"
                       </button>
                     </div>
                   </div>
 
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-[10px] font-mono text-indigo-400 font-bold">
+                  <div className="bg-slate-100 p-2.5 rounded-xl border border-slate-200 text-[10px] font-mono text-indigo-700 font-bold">
                     {voiceLog}
                   </div>
                 </div>
 
                 {/* REQUIREMENT #3 & REQUIREMENT #4: VERIFIED RAMP DETAILS & COMPANION SUGGESTION */}
                 {selectedIssue && (
-                  <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl space-y-4">
-                    <div className="flex justify-between items-start border-b border-slate-800 pb-3">
+                  <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-md space-y-4">
+                    <div className="flex justify-between items-start border-b border-slate-200 pb-3">
                       <div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">
                           Selected Micro-Path Detail
                         </span>
-                        <h3 className="text-base font-extrabold text-white capitalize mt-0.5">
+                        <h3 className="text-base font-extrabold text-slate-900 capitalize mt-0.5">
                           {selectedIssue.type} Issue
                         </h3>
                       </div>
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase border ${
-                        selectedIssue.status === 'fixed' 
-                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
-                          : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                        selectedIssue.status === 'fixed'
+                          ? 'bg-emerald-500/20 text-emerald-700 border-emerald-500/30'
+                          : 'bg-amber-500/20 text-amber-700 border-amber-500/30'
                       }`}>
                         {selectedIssue.status}
                       </span>
                     </div>
 
-                    <div className="space-y-2 text-xs text-slate-300 font-medium">
+                    <div className="space-y-2 text-xs text-slate-700 font-medium">
                       <p><span className="text-slate-500">Location:</span> {selectedIssue.location_name}</p>
-                      <p><span className="text-slate-500">Gradient Measurement:</span> <strong className="text-white font-mono">{selectedIssue.slope_degrees}°</strong> (Standard: ≤ 4.8°)</p>
+                      <p><span className="text-slate-500">Gradient Measurement:</span> <strong className="text-slate-900 font-mono">{selectedIssue.slope_degrees}°</strong> (Standard: ≤ 4.8°)</p>
                       <p><span className="text-slate-500">Handrail Present:</span> {selectedIssue.handrail ? 'Yes' : 'No (Non-Compliant)'}</p>
                     </div>
 
                     {/* REQUIREMENT #4: COMPANION SUGGESTION */}
                     {selectedIssue.slope_degrees > 4.8 && (
-                      <div className="bg-rose-950/40 border border-rose-500/40 p-3 rounded-xl text-xs text-rose-300 font-bold flex items-center gap-2">
+                      <div className="bg-rose-50 border border-rose-500/40 p-3 rounded-xl text-xs text-rose-700 font-bold flex items-center gap-2">
                         <span>💡</span>
                         <span>Companion suggestion: This ramp is steep, consider going with someone.</span>
                       </div>
                     )}
 
                     {/* REQUIREMENT #5: ONE-TAP CONFIRM OR FLAG */}
-                    <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <div className="space-y-2 pt-2 border-t border-slate-200">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-slate-400 block">
+                        <span className="text-[11px] font-bold text-slate-500 block">
                           One-Tap Community Verification:
                         </span>
                         {feedbackMsg && (
-                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40 animate-pulse">
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-500/40 animate-pulse">
                             {feedbackMsg}
                           </span>
                         )}
@@ -1036,17 +1236,17 @@ function IntegratedPitchView({ onBackToHome }) {
                         <button
                           type="button"
                           onClick={() => handleConfirmIssue(selectedIssue.id, true)}
-                          className="bg-emerald-600/30 hover:bg-emerald-600/50 active:scale-95 border border-emerald-500/60 text-emerald-300 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
+                          className="bg-emerald-600/30 hover:bg-emerald-600/50 active:scale-95 border border-emerald-500/60 text-emerald-700 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
                         >
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
                           <span>Still Exists</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => handleConfirmIssue(selectedIssue.id, false)}
-                          className="bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-600 text-slate-200 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
+                          className="bg-slate-100 hover:bg-slate-200 active:scale-95 border border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
                         >
-                          <RefreshCw className="w-3.5 h-3.5 text-slate-300" />
+                          <RefreshCw className="w-3.5 h-3.5 text-slate-700" />
                           <span>Flag Fixed</span>
                         </button>
                       </div>
@@ -1055,9 +1255,9 @@ function IntegratedPitchView({ onBackToHome }) {
                 )}
 
                 {/* REQUIREMENT #8: EMERGENCY BUTTON FOR BLIND USERS */}
-                <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl space-y-3">
+                <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-md space-y-3">
                   <div>
-                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
                       <ShieldAlert className="w-4 h-4 text-red-500" />
                       <span>Visually Impaired Safety Layer</span>
                     </h3>
@@ -1078,14 +1278,17 @@ function IntegratedPitchView({ onBackToHome }) {
         )}
 
         {/* REQUIREMENT #7: SHOP OWNER ALERT */}
-        {activeTab === 'shop' && (
+        {isShopOwner && activeTab === 'shop' && (
           <div className="max-w-3xl mx-auto space-y-6">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex justify-between items-center">
+            <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-md flex justify-between items-center">
               <div>
-                <h2 className="text-xl font-extrabold text-white">Shopkeeper Assistance Monitor</h2>
-                <p className="text-xs text-slate-400 mt-1">Lot 12 - Bandar Bukit Raja Commercial Center</p>
+                <h2 className="text-xl font-extrabold text-slate-900">Shopkeeper Assistance Monitor</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  {shopDetails?.name || 'Your shop'} · {shopDetails?.type || 'Shop'} · {shopDetails?.address || 'SS2, Petaling Jaya'}
+                </p>
+                {shopDetails?.contact && <p className="mt-1 text-[11px] text-slate-500">Contact: {shopDetails.contact}</p>}
               </div>
-              <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
+              <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-700 border border-emerald-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 Vibration & Live Timer Active
               </span>
@@ -1093,33 +1296,33 @@ function IntegratedPitchView({ onBackToHome }) {
 
             <div className="space-y-4">
               {shopArrivals.length === 0 ? (
-                <div className="bg-slate-900/60 border border-slate-800 border-dashed p-12 text-center rounded-2xl space-y-3">
-                  <Store className="w-10 h-10 text-slate-600 mx-auto" />
-                  <p className="text-sm font-semibold text-slate-400">No approaching visitors right now.</p>
+                <div className="bg-white border border-slate-200 border-dashed p-12 text-center rounded-2xl space-y-3">
+                  <Store className="w-10 h-10 text-slate-500 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-500">No approaching visitors right now.</p>
                   <button
                     type="button"
                     onClick={triggerShopArrival}
-                    className="mt-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/40 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer active:scale-95 transition"
+                    className="mt-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-700 border border-blue-500/40 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer active:scale-95 transition"
                   >
                     Simulate Resident Arrival (Wheelchair user arriving, please open door)
                   </button>
                 </div>
               ) : (
                 shopArrivals.map(arrival => (
-                  <div key={arrival.id} className="bg-slate-900 border border-blue-500/40 p-5 rounded-2xl shadow-xl flex items-center justify-between gap-4">
+                  <div key={arrival.id} className="bg-white border border-blue-500/40 p-5 rounded-2xl shadow-md flex items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 shrink-0">
+                      <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-700 shrink-0">
                         <Accessibility className="w-7 h-7 animate-pulse" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h4 className="text-sm font-bold text-white">{arrival.profileType} Arriving</h4>
-                          <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-amber-400 animate-spin" />
+                          <h4 className="text-sm font-bold text-slate-900">{arrival.profileType} Arriving</h4>
+                          <span className="bg-amber-500/20 text-amber-800 border border-amber-500/30 font-mono text-[11px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-amber-700 animate-spin" />
                             ETA: {arrival.secondsLeft > 0 ? arrival.etaFormatted : 'Arriving Now!'}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-300 mt-1 font-medium">
+                        <p className="text-xs text-slate-700 mt-1 font-medium">
                           Distance: {arrival.distance} • Wheelchair user arriving, please open the door.
                         </p>
                       </div>
@@ -1138,31 +1341,25 @@ function IntegratedPitchView({ onBackToHome }) {
           </div>
         )}
 
-        {/* MEASURE RAMP (PERSON A) */}
-        {activeTab === 'measure' && (
-          <div className="max-w-2xl mx-auto bg-slate-900 p-6 rounded-2xl border border-slate-800">
-            <TiltMeter />
-          </div>
-        )}
       </main>
 
       {/* Emergency Modal */}
       {emergencyModalOpen && (
-        <div className="fixed inset-0 z-[200] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border-2 border-red-500 p-6 rounded-2xl max-w-md w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[200] bg-slate-900/30 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white border-2 border-red-500 p-6 rounded-2xl max-w-md w-full shadow-lg space-y-4">
             <div className="flex justify-between items-start">
               <div className="flex items-center gap-2 text-red-500">
                 <ShieldAlert className="w-6 h-6 animate-pulse" />
                 <h3 className="text-lg font-black tracking-wide uppercase">Emergency Signal Sent</h3>
               </div>
-              <button onClick={() => setEmergencyModalOpen(false)} className="text-slate-500 hover:text-white font-bold p-1 cursor-pointer">✕</button>
+              <button onClick={() => setEmergencyModalOpen(false)} className="text-slate-500 hover:text-slate-900 font-bold p-1 cursor-pointer">✕</button>
             </div>
-            <p className="text-xs text-slate-300">
-              [DEMO TEST MODE] GPS Coordinates logged: <strong className="text-white font-mono">3.0810, 101.4465</strong>. Dialing 999 simulated safely.
+            <p className="text-xs text-slate-700">
+              [DEMO TEST MODE] GPS Coordinates logged: <strong className="text-slate-900 font-mono">3.11806, 101.62083</strong>. Dialing 999 simulated safely.
             </p>
             <button
               onClick={() => setEmergencyModalOpen(false)}
-              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs py-2.5 rounded-xl cursor-pointer"
+              className="w-full bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold text-xs py-2.5 rounded-xl cursor-pointer"
             >
               Close Test Modal
             </button>
@@ -1193,8 +1390,29 @@ export default function App() {
     return <DeveloperHome onLogout={handleLogout} />;
   }
 
-  if (currentScreen === 'pitch') {
-    return <IntegratedPitchView onBackToHome={() => setCurrentScreen('home')} />;
+  if (currentScreen === 'pitch' || currentScreen === 'home') {
+    return (
+      <IntegratedPitchView
+        onOpenReport={() => setCurrentScreen('issues')}
+        onOpenPassive={() => setCurrentScreen('passive')}
+        onLogout={handleLogout}
+        isShopOwner={Boolean(user?.user_metadata?.shopOwner)}
+        shopDetails={user?.user_metadata?.shop}
+      />
+    );
+  }
+
+  if (currentScreen === 'issues') {
+    return (
+      <IssuePicker
+        onChooseIssue={(issueType) => {
+          setSelectedIssueType(issueType);
+          setCurrentScreen('report');
+        }}
+        onBackToMap={() => setCurrentScreen('home')}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   if (currentScreen === 'passive') {
@@ -1223,7 +1441,10 @@ export default function App() {
           >
             ← Back to Resident Home
           </button>
-          <ReportForm issueType={selectedIssueType} onCancel={() => setCurrentScreen('home')} />
+          <ReportForm
+            initialIssueType={selectedIssueType}
+            onBackToDashboard={() => setCurrentScreen('home')}
+          />
         </div>
       </div>
     );
