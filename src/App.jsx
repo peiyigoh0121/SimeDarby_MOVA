@@ -1,10 +1,21 @@
-import { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 import ReportForm from './ReportForm.jsx';
 import MotionLogger from './MotionLogger.jsx';
+import { getSupabaseClient, logSupabaseRequestError } from './lib/supabaseClient.js';
+import { fetchIssues, subscribeToIssues } from './lib/issueRepository.js';
+import { sortIssuesByPriority } from './lib/issuePriority.js';
+import { buildIssueQueues } from './lib/issueQueues.js';
+import { getIssueWorkflow, ISSUE_WORKFLOW_STATUSES } from './lib/issueWorkflow.js';
+import { DEFAULT_DISTANCE_THRESHOLD_METERS, evaluateConfidenceCount, evaluateMultiSignalEscalation } from './lib/issueEvidence.js';
+import { calculateTownshipAccessibilityRating } from './lib/townshipRating.js';
+import { createUnconfirmedEmergencySafetyEvent, getEmergencyAlertIntegrationStatus } from './lib/emergencyAlertIntegration.js';
+import { getFictionalDemoIssues } from './lib/fictionalDemoIssues.js';
+import { buildShopOwnerMetadata, getShopRegistrationValidationError, hasShopOwnerAccess, hasShopkeeperMonitorAccess, isShopOwnerSignup } from './lib/shopOwnerRegistration.js';
+import { getAuthErrorMessage, getConfirmationRequiredNotice } from './lib/authFeedback.js';
 import { 
   ArrowRight, 
   Building, 
@@ -15,10 +26,8 @@ import {
   Store, 
   ShieldAlert, 
   Award, 
-  CheckCircle2, 
   Eye, 
   Accessibility, 
-  RefreshCw,
   PhoneCall,
   Clock,
   Mic,
@@ -46,6 +55,139 @@ const defaultIcon = L.divIcon({
   iconSize: [28, 28],
   iconAnchor: [14, 28]
 });
+
+const INITIAL_MAP_VIEW = {
+  center: [3.11806, 101.62083],
+  zoom: 16,
+};
+
+function MapViewportManager({ onViewChange }) {
+  const map = useMap();
+
+  useMapEvents({
+    moveend() {
+      const center = map.getCenter();
+      onViewChange({ center: [center.lat, center.lng], zoom: map.getZoom() });
+    },
+  });
+
+  useEffect(() => {
+    const container = map.getContainer();
+    let animationFrame;
+    const invalidateSize = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(() => {
+        map.invalidateSize({ animate: false, pan: false });
+      });
+    };
+
+    invalidateSize();
+    if (typeof ResizeObserver === 'undefined') {
+      return () => cancelAnimationFrame(animationFrame);
+    }
+
+    const observer = new ResizeObserver(invalidateSize);
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(animationFrame);
+    };
+  }, [map]);
+
+  return null;
+}
+
+function IssueQueuePanel({ title, description, entries, selectedIssue, onSelect }) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-3" aria-label={title}>
+      <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-700">{title}</h2>
+      <p className="mt-1 text-[10px] text-slate-500">{description}</p>
+      {entries.length === 0 ? (
+        <p className="mt-3 rounded-lg bg-slate-50 p-2 text-[10px] font-semibold text-slate-500">No open issues in this queue.</p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {entries.map(({ issue, priority }) => (
+            <button
+              key={issue.id}
+              type="button"
+              onClick={() => onSelect(issue)}
+              className={`w-full rounded-lg border p-2.5 text-left transition hover:border-indigo-300 hover:bg-slate-50 ${
+                selectedIssue?.id === issue.id
+                  ? 'border-indigo-500 bg-indigo-50/40'
+                  : 'border-slate-200 bg-white'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-xs font-bold capitalize text-slate-800">{issue.type}</span>
+                {priority.state === 'scored' ? (
+                  <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-extrabold text-rose-700">{priority.score}/100</span>
+                ) : (
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-extrabold text-amber-800">Needs triage</span>
+                )}
+              </div>
+              <p className="mt-1 text-[10px] text-slate-600">Status: {issue.status}</p>
+              <p className="mt-1 text-[10px] text-slate-500">Location: {issue.location_name}</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function IssueWorkflowPanel({ issue }) {
+  const workflow = getIssueWorkflow(issue)
+
+  return (
+    <section className="space-y-3 border-t border-slate-200 pt-3" aria-labelledby="issue-workflow-heading">
+      <div>
+        <h4 id="issue-workflow-heading" className="text-[11px] font-bold text-slate-600">Issue status workflow</h4>
+        <p className="mt-1 text-[10px] text-slate-500">Read-only until approved workflow storage and permissions are available.</p>
+      </div>
+      <ol className="grid grid-cols-4 gap-1">
+        {ISSUE_WORKFLOW_STATUSES.map((status, index) => (
+          <li
+            key={status}
+            className={`rounded-md px-1 py-1.5 text-center text-[9px] font-bold uppercase ${
+              index < workflow.currentIndex
+                ? 'bg-emerald-100 text-emerald-800'
+                : index === workflow.currentIndex
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-100 text-slate-500'
+            }`}
+          >
+            {status}
+          </li>
+        ))}
+      </ol>
+      <p className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-[10px] font-semibold text-slate-600">{workflow.guidance}</p>
+    </section>
+  )
+}
+
+function IssueEvidencePanel({ issue, issues }) {
+  // MOVA currently stores neither an independent reporter identifier nor a signal type.
+  // The evaluators therefore deliberately return insufficient evidence for live data.
+  const confidence = evaluateConfidenceCount(issue, issues);
+  const escalation = evaluateMultiSignalEscalation(issue, issues);
+
+  return (
+    <section className="space-y-3 border-t border-slate-200 pt-3" aria-labelledby="issue-evidence-heading">
+      <div>
+        <h4 id="issue-evidence-heading" className="text-[11px] font-bold text-slate-600">Agreement and escalation</h4>
+        <p className="mt-1 text-[10px] text-slate-500">Separate from priority scoring and status workflow. Location threshold: {DEFAULT_DISTANCE_THRESHOLD_METERS}m.</p>
+      </div>
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] text-amber-900">
+        <p className="font-bold">Confidence count: Insufficient evidence</p>
+        <p className="mt-1">{confidence.reason} A report count is not a statistically validated confidence probability.</p>
+      </div>
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] text-amber-900">
+        <p className="font-bold">Multi-signal escalation: Insufficient evidence</p>
+        <p className="mt-1">{escalation.reason} No escalation is applied.</p>
+      </div>
+    </section>
+  )
+}
 
 const REPORT_ISSUES = [
   {
@@ -106,45 +248,6 @@ const REPORT_ISSUES = [
   },
 ];
 
-const INITIAL_MOCK_ISSUES = [
-  {
-    id: 'mock-1',
-    type: 'ramp',
-    lat: 3.1191,
-    lng: 101.6197,
-    slope_degrees: 8.5,
-    location_name: 'SS2 commercial area, Petaling Jaya',
-    severity: 4,
-    status: 'reported',
-    handrail: false,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'mock-2',
-    type: 'blocked paving',
-    lat: 3.1172,
-    lng: 101.6190,
-    slope_degrees: 0,
-    location_name: 'SS2 pedestrian crossing, Petaling Jaya',
-    severity: 3,
-    status: 'reported',
-    handrail: true,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'mock-3',
-    type: 'broken paving',
-    lat: 3.1187,
-    lng: 101.6221,
-    slope_degrees: 0,
-    location_name: 'SS2 walkway, Petaling Jaya',
-    severity: 2,
-    status: 'fixed',
-    handrail: true,
-    created_at: new Date().toISOString()
-  }
-];
-
 function BrandHeader({ onLogout }) {
   return (
     <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-4 sm:px-6">
@@ -186,37 +289,61 @@ function AuthPage({ onSignedIn }) {
   const [shopAddress, setShopAddress] = useState('');
   const [shopType, setShopType] = useState('');
   const [shopContact, setShopContact] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const isSignup = mode === 'signup';
+  const registeringShopOwner = isShopOwnerSignup(role, hasShop);
 
-  function submitAuth(e) {
+  async function submitAuth(e) {
     e.preventDefault();
-    onSignedIn({
-      id: 'usr_' + role,
-      email: email || `${role}@ss2.mova.my`,
-      user_metadata: {
-        role,
-        shopOwner: role === 'resident' && hasShop,
-        ...(role === 'resident' && hasShop && isSignup
-          ? { shop: { name: shopName, address: shopAddress, type: shopType, contact: shopContact } }
-          : {}),
-      },
-    });
-  }
+    setAuthError('');
+    setAuthNotice('');
 
-  function handleQuickDemo(targetRole) {
-    const isShopOwnerDemo = targetRole === 'shop_owner';
-    const accountRole = isShopOwnerDemo ? 'resident' : targetRole;
-    onSignedIn({
-      id: 'demo_' + targetRole,
-      email: `${targetRole}@ss2.mova.my`,
-      user_metadata: {
-        role: accountRole,
-        shopOwner: isShopOwnerDemo,
-        ...(isShopOwnerDemo
-          ? { shop: { name: 'SS2 Demo Cafe', address: 'SS2 Commercial Area, Petaling Jaya', type: 'Cafe', contact: '012-345 6789' } }
-          : {}),
-      },
-    });
+    const shop = { name: shopName, address: shopAddress, type: shopType, contact: shopContact };
+    const shopValidationError = getShopRegistrationValidationError({ isSignup, registeringShopOwner, shop });
+    if (shopValidationError) {
+      setAuthError(shopValidationError);
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const supabase = getSupabaseClient();
+      const result = isSignup
+        ? await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              ...buildShopOwnerMetadata({
+                role,
+                hasShop,
+                shop,
+              }),
+            },
+          },
+        })
+        : await supabase.auth.signInWithPassword({ email, password });
+
+      if (result.error) throw result.error;
+
+      if (isSignup && !result.data.session) {
+        setAuthNotice(getConfirmationRequiredNotice());
+      } else if (result.data.user) {
+        onSignedIn(result.data.user);
+      }
+    } catch (error) {
+      logSupabaseRequestError(
+        isSignup ? 'sign-up' : 'sign-in',
+        isSignup ? '/auth/v1/signup' : '/auth/v1/token?grant_type=password',
+        error,
+      );
+      setAuthError(getAuthErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -242,6 +369,7 @@ function AuthPage({ onSignedIn }) {
         </section>
 
         <form
+          noValidate
           onSubmit={submitAuth}
           className="rounded-3xl bg-white p-6 sm:p-8 shadow-xs border border-slate-200/90 space-y-5"
         >
@@ -257,12 +385,12 @@ function AuthPage({ onSignedIn }) {
           <div className="rounded-2xl bg-indigo-50/70 p-3.5 border border-indigo-100 space-y-2">
             <span className="text-[11px] font-bold text-indigo-950 flex items-center gap-1">
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              1-Click Demo Testing:
+              Real Supabase account required
             </span>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <button
                 type="button"
-                onClick={() => handleQuickDemo('resident')}
+                disabled
                 className="py-2.5 px-3 rounded-xl bg-white hover:bg-slate-50 border border-indigo-200 text-indigo-700 font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
               >
                 <User className="w-3.5 h-3.5 text-indigo-600" />
@@ -270,7 +398,7 @@ function AuthPage({ onSignedIn }) {
               </button>
               <button
                 type="button"
-                onClick={() => handleQuickDemo('shop_owner')}
+                disabled
                 className="py-2.5 px-3 rounded-xl bg-white hover:bg-slate-50 border border-emerald-200 text-emerald-800 font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
               >
                 <Store className="w-3.5 h-3.5 text-emerald-700" />
@@ -278,7 +406,7 @@ function AuthPage({ onSignedIn }) {
               </button>
               <button
                 type="button"
-                onClick={() => handleQuickDemo('developer')}
+                disabled
                 className="py-2.5 px-3 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
               >
                 <Building className="w-3.5 h-3.5 text-slate-500" />
@@ -286,6 +414,9 @@ function AuthPage({ onSignedIn }) {
               </button>
             </div>
           </div>
+
+          {authError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">{authError}</p>}
+          {authNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">{authNotice}</p>}
 
           {isSignup && (
             <div>
@@ -299,15 +430,15 @@ function AuthPage({ onSignedIn }) {
                 className="w-full min-h-12 rounded-xl border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-600 cursor-pointer"
               >
                 <option value="resident">Resident</option>
-                <option value="developer">Developer</option>
+                <option value="shop_owner">Shop Owner</option>
               </select>
             </div>
           )}
 
           {isSignup && role === 'resident' && (
             <fieldset className="space-y-2 rounded-2xl border border-slate-200 p-4">
-              <legend className="px-1 text-xs font-bold text-slate-800">Do you own a shop?</legend>
-              <p className="text-[11px] text-slate-500">This is optional. Shop owners keep all resident features and also get the Shopkeeper Monitor.</p>
+              <legend className="px-1 text-xs font-bold text-slate-800">Enable Shopkeeper Monitor?</legend>
+              <p className="text-[11px] text-slate-500">This optional opt-in gives a resident account access to its shop's assistance monitor.</p>
               <div className="flex gap-3">
                 {[
                   { value: false, label: 'No' },
@@ -328,11 +459,11 @@ function AuthPage({ onSignedIn }) {
             </fieldset>
           )}
 
-          {isSignup && role === 'resident' && hasShop && (
+          {isSignup && registeringShopOwner && (
             <section className="space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Shop details</h3>
-                <p className="mt-0.5 text-[11px] text-slate-500">These details identify your shop in the assistance monitor.</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">These details identify your shop in the assistance monitor. This enables the feature for your registered account.</p>
               </div>
               <div>
                 <label htmlFor="shop-name" className="mb-1.5 block text-xs font-bold text-slate-700">Shop name</label>
@@ -426,9 +557,10 @@ function AuthPage({ onSignedIn }) {
 
           <button
             type="submit"
+            disabled={isSubmitting}
             className="w-full min-h-12 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-xs transition-colors cursor-pointer"
           >
-            {isSignup ? 'Create Account' : 'Sign In'}
+            {isSubmitting ? 'Please wait…' : isSignup ? 'Create Account' : 'Sign In'}
           </button>
 
           <p className="text-center text-xs text-slate-500 pt-1">
@@ -699,15 +831,19 @@ function DeveloperHome({ onLogout }) {
 }
 
 // --- PERSON C INTEGRATED PITCH VIEW COMPONENT ---
-function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwner, shopDetails }) {
+function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwner, shopDetails, shopkeeperSetupIncomplete }) {
   const [activeTab, setActiveTab] = useState('resident');
   const [profile, setProfile] = useState('wheelchair');
-  const [issues, setIssues] = useState(INITIAL_MOCK_ISSUES);
-  const [selectedIssue, setSelectedIssue] = useState(INITIAL_MOCK_ISSUES[0]);
-  const [townshipRating] = useState({ badge: 'SILVER', percentage: 82 });
+  const [issues, setIssues] = useState([]);
+  const [selectedIssue, setSelectedIssue] = useState(null);
+  const [issuesState, setIssuesState] = useState('loading');
+  const [issuesError, setIssuesError] = useState('');
+  const [dataMode, setDataMode] = useState('live');
+  const [demoNotice, setDemoNotice] = useState('');
   const [shopArrivals, setShopArrivals] = useState([]);
   const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
-  const [feedbackMsg, setFeedbackMsg] = useState('');
+  const [emergencySafetyEvent, setEmergencySafetyEvent] = useState(null);
+  const [, setFeedbackMsg] = useState('');
 
   // VOICE DETECTOR STATES & AUDIO STREAM REFS
   const [isListening, setIsListening] = useState(false);
@@ -717,6 +853,82 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
   const audioContextRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const animFrameRef = useRef(null);
+  const [mapView, setMapView] = useState({
+    center: [...INITIAL_MAP_VIEW.center],
+    zoom: INITIAL_MAP_VIEW.zoom,
+  });
+  const rankedIssues = sortIssuesByPriority(issues);
+  const issueQueues = buildIssueQueues(rankedIssues);
+  const townshipRating = calculateTownshipAccessibilityRating(issues);
+
+  const handleMapViewChange = useCallback((nextView) => {
+    setMapView((currentView) => {
+      if (
+        currentView.zoom === nextView.zoom &&
+        currentView.center[0] === nextView.center[0] &&
+        currentView.center[1] === nextView.center[1]
+      ) {
+        return currentView;
+      }
+
+      return nextView;
+    });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    if (dataMode === 'demo') {
+      Promise.resolve().then(() => {
+        try {
+          const demoIssues = getFictionalDemoIssues();
+          if (!active) return;
+          setIssues(demoIssues);
+          setSelectedIssue(demoIssues[0] || null);
+          setIssuesError('');
+          setIssuesState('ready');
+        } catch (error) {
+          if (!active) return;
+          setIssues([]);
+          setSelectedIssue(null);
+          setIssuesState('error');
+          setIssuesError(error instanceof Error ? error.message : 'Could not load fictional demo data.');
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    async function loadIssues() {
+      setIssuesState('loading');
+      setIssuesError('');
+      try {
+        const nextIssues = await fetchIssues();
+        if (!active) return;
+        setIssues(nextIssues);
+        setSelectedIssue((current) => nextIssues.find((issue) => issue.id === current?.id) || nextIssues[0] || null);
+        setIssuesState(nextIssues.length === 0 ? 'empty' : 'ready');
+      } catch (error) {
+        if (!active) return;
+        setIssues([]);
+        setSelectedIssue(null);
+        setIssuesState('error');
+        setIssuesError(error instanceof Error ? error.message : 'Could not load issues from the shared database.');
+      }
+    }
+
+    loadIssues();
+    const unsubscribe = subscribeToIssues(loadIssues, (error) => {
+      if (!active) return;
+      setIssuesError(error.message);
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [dataMode]);
 
   useEffect(() => () => {
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
@@ -749,15 +961,39 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
     return () => clearInterval(timer);
   }, []);
 
-  const triggerEmergencyAction = () => {
+  const emergencyIntegration = getEmergencyAlertIntegrationStatus();
+
+  const openEmergencySafetyReview = (source) => {
+    setEmergencySafetyEvent(createUnconfirmedEmergencySafetyEvent({
+      source,
+      observedAt: new Date().toISOString(),
+    }));
     setEmergencyModalOpen(true);
-    setVoiceLog('🚨 Voice Peak Triggered: Emergency Signal Activated!');
+    setVoiceLog(source === 'microphone_peak_detector'
+      ? 'Microphone peak detected. Emergency is unconfirmed; safety review opened.'
+      : 'Emergency safety review opened. No alert has been sent.');
     if ('vibrate' in navigator) navigator.vibrate([300, 100, 300]);
   };
 
+  const triggerEmergencyAction = () => openEmergencySafetyReview('microphone_peak_detector');
+
+  const openReportFromPitch = () => {
+    if (dataMode === 'demo') {
+      setDemoNotice('Demo Mode is read-only. Exit Demo Mode before opening the real report submission flow.');
+      return;
+    }
+    onOpenReport();
+  };
+
   const triggerReportAction = () => {
-    setVoiceLog('📝 Voice Command Triggered: Barrier Report Opened!');
-    setFeedbackMsg('✓ Voice Command: Barrier report triggered!');
+    openReportFromPitch();
+    if (dataMode === 'demo') {
+      setVoiceLog('Demo Mode: real report submission remains disabled.');
+      setFeedbackMsg('Demo Mode: exit before opening the real report flow.');
+    } else {
+      setVoiceLog('📝 Voice Command Triggered: Barrier Report Opened!');
+      setFeedbackMsg('✓ Voice Command: Barrier report triggered!');
+    }
     setTimeout(() => setFeedbackMsg(''), 3000);
     if ('vibrate' in navigator) navigator.vibrate(150);
   };
@@ -811,7 +1047,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
 
       analyzeFrame();
       setIsListening(true);
-      setVoiceLog('Microphone listening... Speak or shout "Emergency" into mic.');
+          setVoiceLog('Microphone listening for sustained loud sound. It cannot confirm an emergency.');
     } catch (err) {
       console.error('Microphone error:', err);
       if (mediaStreamRef.current) {
@@ -848,6 +1084,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
     }
   };
 
+  /*
   const handleConfirmIssue = (id, isConfirm) => {
     setIssues(prevIssues =>
       prevIssues.map(issue => {
@@ -879,6 +1116,8 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
     setTimeout(() => setFeedbackMsg(''), 3000);
   };
 
+  */
+
   const triggerShopArrival = () => {
     if ('vibrate' in navigator) {
       navigator.vibrate([200, 100, 200]);
@@ -886,7 +1125,6 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
 
     const newArrival = {
       id: `arrival-${Date.now()}`,
-      residentName: 'Aishah (Opted-in Resident)',
       profileType: 'Wheelchair User',
       secondsLeft: 120,
       etaFormatted: '2:00',
@@ -978,7 +1216,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={onOpenReport}
+              onClick={openReportFromPitch}
               className="rounded-xl bg-indigo-600 px-3.5 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700"
             >
               Report a Barrier
@@ -991,7 +1229,44 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
               Passive Detection
             </button>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (dataMode === 'demo') {
+                  setIssues([]);
+                  setSelectedIssue(null);
+                  setIssuesState('loading');
+                  setDataMode('live');
+                } else {
+                  setDataMode('demo');
+                }
+                setDemoNotice('');
+              }}
+              className="rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs font-bold text-amber-900 transition hover:bg-amber-100"
+            >
+              {dataMode === 'demo' ? 'Exit Demo Mode' : 'View Fictional Demo Data'}
+            </button>
+            {dataMode === 'demo' && (
+              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-800">DEMO DATA — NOT REAL REPORTS</span>
+            )}
+          </div>
         </div>
+
+        {dataMode === 'demo' && (
+          <section className="mb-5 rounded-xl border-2 border-amber-400 bg-amber-50 p-3 text-xs text-amber-950" aria-label="Demo data notice">
+            <p className="font-extrabold">DEMO DATA — NOT REAL REPORTS</p>
+            <p className="mt-1">Showing eight local fictional scenarios only. They are not fetched from, inserted into, or combined with public.&quot;MOVA&quot;. Report submission is disabled until you exit Demo Mode.</p>
+          </section>
+        )}
+        {demoNotice && (
+          <p role="status" className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">{demoNotice}</p>
+        )}
+        {shopkeeperSetupIncomplete && (
+          <p role="status" className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+            Your Shopkeeper Monitor setup is incomplete. You are signed in, but the monitor stays unavailable until approved account support adds your missing shop details.
+          </p>
+        )}
 
         {/* RESIDENT NAVIGATION VIEW */}
         {activeTab === 'resident' && (
@@ -1031,7 +1306,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                 </div>
               </div>
 
-              {/* REQUIREMENT #6: BADGE DISPLAY */}
+              {/* Data-based project indicator; not a legal accessibility certification. */}
               <div className="flex items-center gap-3 bg-gradient-to-r from-white via-slate-50 to-white p-3 rounded-xl border border-amber-500/30 shadow-lg">
                 <div className="w-10 h-10 rounded-lg flex items-center justify-center font-black text-sm border bg-slate-300/10 text-slate-700 border-slate-400/30">
                   <Award className="w-6 h-6" />
@@ -1040,12 +1315,19 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-slate-500">Township Rating:</span>
                     <span className="text-xs font-black uppercase tracking-wider text-slate-700">
-                      {townshipRating.badge} ACCESSIBLE
+                      {townshipRating.state === 'insufficient_data'
+                        ? 'INSUFFICIENT DATA'
+                        : townshipRating.badge
+                          ? `${townshipRating.badge} PROJECT INDICATOR`
+                          : 'BELOW BRONZE'}
                     </span>
                   </div>
-                  <p className="text-xs font-bold text-emerald-700 mt-0.5">
-                    {townshipRating.percentage}% Paths Verified Compliant
+                  <p className="text-xs font-bold text-slate-600 mt-0.5">
+                    {townshipRating.state === 'insufficient_data'
+                      ? `${townshipRating.completeRecords}/${townshipRating.totalRecords} complete records (${townshipRating.coveragePercent}% coverage).`
+                      : `${townshipRating.score}/100 from verified-resolution status; ${townshipRating.coveragePercent}% record coverage.`}
                   </p>
+                  <p className="mt-0.5 text-[10px] text-slate-500">Project indicator only — not a legal accessibility certification.</p>
                 </div>
               </div>
             </div>
@@ -1068,16 +1350,17 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
 
                 <div className="relative z-0 h-[380px] w-full rounded-xl overflow-hidden border border-slate-200">
                   <MapContainer
-                    center={[3.11806, 101.62083]}
-                    zoom={16}
+                    center={mapView.center}
+                    zoom={mapView.zoom}
                     scrollWheelZoom={true}
                     style={{ height: '100%', width: '100%' }}
                   >
+                    <MapViewportManager onViewChange={handleMapViewChange} />
                     <TileLayer
                       attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     />
-                    {issues.map((issue) => (
+                    {issues.filter((issue) => Number.isFinite(issue.lat) && Number.isFinite(issue.lng)).map((issue) => (
                       <Marker
                         key={issue.id}
                         position={[issue.lat, issue.lng]}
@@ -1086,7 +1369,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                           click: () => setSelectedIssue(issue),
                         }}
                       >
-                        <Popup>
+                        <Popup autoPan={false}>
                           <div className="text-xs font-sans text-slate-900 font-bold">
                             <p className="capitalize text-blue-600">{issue.type} Issue</p>
                             <p className="text-[10px] text-slate-500">{issue.location_name}</p>
@@ -1105,6 +1388,90 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                   </div>
                   <span className="text-[11px] font-mono text-slate-500">Live GPS Connected</span>
                 </div>
+
+                {issuesState === 'loading' && (
+                  <p role="status" className="mt-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs font-semibold text-indigo-700">Loading shared accessibility issues…</p>
+                )}
+                {issuesState === 'empty' && (
+                  <p role="status" className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">No accessibility issues are available in the shared database yet.</p>
+                )}
+                {issuesState === 'ready' && issues.length > 0 && !issues.some((issue) => Number.isFinite(issue.lat) && Number.isFinite(issue.lng)) && (
+                  <p role="status" className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">Issues loaded, but their coordinate format cannot be shown on the map yet.</p>
+                )}
+                {issuesState === 'error' && (
+                  <p role="alert" className="mt-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">Could not load shared issues: {issuesError}</p>
+                )}
+
+                {issuesState === 'ready' && rankedIssues.length > 0 && (
+                  <section className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3" aria-labelledby="priority-list-heading">
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 id="priority-list-heading" className="text-xs font-extrabold uppercase tracking-wider text-slate-700">Issue priority</h2>
+                      <span className="text-[10px] font-semibold text-slate-500">Scored issues first</span>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {rankedIssues.map(({ issue, priority }) => (
+                        <button
+                          key={issue.id}
+                          type="button"
+                          onClick={() => setSelectedIssue(issue)}
+                          className={`w-full rounded-lg border p-2.5 text-left transition hover:border-indigo-300 hover:bg-white ${
+                            selectedIssue?.id === issue.id
+                              ? 'border-indigo-500 bg-white shadow-sm'
+                              : 'border-slate-200 bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <span className="text-xs font-bold capitalize text-slate-800">{issue.type} issue</span>
+                            {priority.state === 'scored' && (
+                              <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-extrabold text-rose-700">{priority.score}/100</span>
+                            )}
+                            {priority.state === 'needs_triage' && (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-extrabold text-amber-800">Needs triage</span>
+                            )}
+                            {priority.state === 'resolved' && (
+                              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700">Resolved</span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[10px] text-slate-500">
+                            {priority.state === 'needs_triage'
+                              ? `Missing: ${priority.missingFields.join(', ')}`
+                              : issue.location_name}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {issuesState === 'ready' && rankedIssues.length > 0 && (
+                  <section className="mt-3" aria-label="Read-only issue queues">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-700">Issue queues</h2>
+                      <span className="text-[10px] font-semibold text-slate-500">Read-only classification</span>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <IssueQueuePanel
+                        title="Maintenance"
+                        description="Physical repairs and service faults."
+                        entries={issueQueues.maintenance}
+                        selectedIssue={selectedIssue}
+                        onSelect={setSelectedIssue}
+                      />
+                      <IssueQueuePanel
+                        title="Enforcement"
+                        description="Obstructions requiring enforcement follow-up."
+                        entries={issueQueues.enforcement}
+                        selectedIssue={selectedIssue}
+                        onSelect={setSelectedIssue}
+                      />
+                    </div>
+                    {issueQueues.unclassified.length > 0 && (
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] font-semibold text-amber-800">
+                        {issueQueues.unclassified.length} issue{issueQueues.unclassified.length === 1 ? '' : 's'} need queue triage because their type is not in the current project taxonomy.
+                      </p>
+                    )}
+                  </section>
+                )}
               </div>
 
               {/* DETAILS PANEL, VOICE CONTROL & SAFETY LAYER */}
@@ -1126,7 +1493,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                   </div>
 
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Peak waveform analyzer. Speak or shout <strong className="text-slate-900">"Emergency"</strong> directly into mic.
+                    Sustained loud sound opens an unconfirmed safety review. It does not recognise words or confirm an emergency.
                   </p>
 
                   {isListening && (
@@ -1159,15 +1526,15 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
 
                   <div className="pt-2 border-t border-slate-200 space-y-1.5">
                     <span className="text-[10px] font-bold text-slate-500 block">
-                      Instant Command Triggers:
+                      Safety review controls:
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={triggerEmergencyAction}
+                        onClick={() => openEmergencySafetyReview('manual_safety_control')}
                         className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-500/40 text-[10px] font-bold py-2 rounded-lg transition active:scale-95 cursor-pointer"
                       >
-                        🗣 "Emergency"
+                        Open emergency review
                       </button>
                       <button
                         type="button"
@@ -1219,38 +1586,8 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                       </div>
                     )}
 
-                    {/* REQUIREMENT #5: ONE-TAP CONFIRM OR FLAG */}
-                    <div className="space-y-2 pt-2 border-t border-slate-200">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-slate-500 block">
-                          One-Tap Community Verification:
-                        </span>
-                        {feedbackMsg && (
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-500/40 animate-pulse">
-                            {feedbackMsg}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmIssue(selectedIssue.id, true)}
-                          className="bg-emerald-600/30 hover:bg-emerald-600/50 active:scale-95 border border-emerald-500/60 text-emerald-700 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>Still Exists</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmIssue(selectedIssue.id, false)}
-                          className="bg-slate-100 hover:bg-slate-200 active:scale-95 border border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer z-20"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5 text-slate-700" />
-                          <span>Flag Fixed</span>
-                        </button>
-                      </div>
-                    </div>
+                    <IssueWorkflowPanel issue={selectedIssue} />
+                    <IssueEvidencePanel issue={selectedIssue} issues={issues} />
                   </div>
                 )}
 
@@ -1264,12 +1601,12 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                   </div>
 
                   <button
-                    onClick={() => setEmergencyModalOpen(true)}
-                    aria-label="Emergency assistance button, test mode to alert 999"
+                    onClick={() => openEmergencySafetyReview('manual_safety_control')}
+                    aria-label="Open emergency safety review"
                     className="w-full bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white font-black py-4 rounded-xl shadow-lg shadow-red-600/30 text-sm tracking-wider uppercase border-2 border-red-400 flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <PhoneCall className="w-5 h-5 animate-bounce" />
-                    <span>Emergency Assistance (999 Test Mode)</span>
+                    <span>Emergency Safety Review</span>
                   </button>
                 </div>
               </div>
@@ -1290,7 +1627,7 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
               </div>
               <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-700 border border-emerald-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                Vibration & Live Timer Active
+                Local demo monitor
               </span>
             </div>
 
@@ -1299,12 +1636,13 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
                 <div className="bg-white border border-slate-200 border-dashed p-12 text-center rounded-2xl space-y-3">
                   <Store className="w-10 h-10 text-slate-500 mx-auto" />
                   <p className="text-sm font-semibold text-slate-500">No approaching visitors right now.</p>
+                  <p className="text-[11px] text-slate-500">Demo only: this trigger stays in this browser tab. GPS proximity and cross-tab Supabase Realtime are not configured.</p>
                   <button
                     type="button"
                     onClick={triggerShopArrival}
                     className="mt-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-700 border border-blue-500/40 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer active:scale-95 transition"
                   >
-                    Simulate Resident Arrival (Wheelchair user arriving, please open door)
+                    Simulate Local Arrival (Wheelchair user arriving, please open door)
                   </button>
                 </div>
               ) : (
@@ -1350,13 +1688,18 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
             <div className="flex justify-between items-start">
               <div className="flex items-center gap-2 text-red-500">
                 <ShieldAlert className="w-6 h-6 animate-pulse" />
-                <h3 className="text-lg font-black tracking-wide uppercase">Emergency Signal Sent</h3>
+                <h3 className="text-lg font-black tracking-wide uppercase">Emergency alert not sent</h3>
               </div>
               <button onClick={() => setEmergencyModalOpen(false)} className="text-slate-500 hover:text-slate-900 font-bold p-1 cursor-pointer">✕</button>
             </div>
-            <p className="text-xs text-slate-700">
-              [DEMO TEST MODE] GPS Coordinates logged: <strong className="text-slate-900 font-mono">3.11806, 101.62083</strong>. Dialing 999 simulated safely.
-            </p>
+            <div className="space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <p className="font-bold">Status: Not sent — integration unavailable</p>
+              <p>Source: {emergencySafetyEvent?.source === 'microphone_peak_detector' ? 'Microphone peak detector (unconfirmed)' : 'Manual safety control'}</p>
+              <p>Observed: {emergencySafetyEvent?.observedAt ? new Date(emergencySafetyEvent.observedAt).toLocaleString() : 'Unavailable'}</p>
+              <p>Location: Unavailable. The map view is not used as an alert location.</p>
+            </div>
+            <p className="text-xs text-slate-700">{emergencyIntegration.message} Emergency alerts are separate from accessibility issue reports.</p>
+            <p className="text-[11px] text-slate-500">For immediate danger, use your local emergency service or other approved emergency channel.</p>
             <button
               onClick={() => setEmergencyModalOpen(false)}
               className="w-full bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold text-xs py-2.5 rounded-xl cursor-pointer"
@@ -1372,19 +1715,53 @@ function IntegratedPitchView({ onOpenReport, onOpenPassive, onLogout, isShopOwne
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [currentScreen, setCurrentScreen] = useState('home');
   const [selectedIssueType, setSelectedIssueType] = useState('ramp');
 
-  const handleLogout = () => {
-    setUser(null);
+  useEffect(() => {
+    let active = true;
+    const supabase = getSupabaseClient();
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) logSupabaseRequestError('session restore', '/auth/v1/user', error);
+      setUser(data.session?.user || null);
+      setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setUser(session?.user || null);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    const { error } = await getSupabaseClient().auth.signOut();
+    if (error) {
+      logSupabaseRequestError('sign-out', '/auth/v1/logout', error);
+      return;
+    }
     setCurrentScreen('home');
   };
+
+  if (authLoading) {
+    return <main className="min-h-screen bg-slate-50 grid place-items-center p-6 text-sm font-semibold text-slate-600">Checking your secure session…</main>;
+  }
 
   if (!user) {
     return <AuthPage onSignedIn={(userData) => setUser(userData)} />;
   }
 
   const userRole = user?.user_metadata?.role || 'resident';
+  const shopkeeperSetupIncomplete = hasShopOwnerAccess(user?.user_metadata)
+    && !hasShopkeeperMonitorAccess(user?.user_metadata);
 
   if (userRole === 'developer') {
     return <DeveloperHome onLogout={handleLogout} />;
@@ -1396,8 +1773,9 @@ export default function App() {
         onOpenReport={() => setCurrentScreen('issues')}
         onOpenPassive={() => setCurrentScreen('passive')}
         onLogout={handleLogout}
-        isShopOwner={Boolean(user?.user_metadata?.shopOwner)}
+        isShopOwner={hasShopkeeperMonitorAccess(user?.user_metadata)}
         shopDetails={user?.user_metadata?.shop}
+        shopkeeperSetupIncomplete={shopkeeperSetupIncomplete}
       />
     );
   }

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import TiltMeter from './TiltMeter.jsx';
 import { assessRamp } from './lib/assessRamp.js';
+import { getResidentSubmissionError } from './lib/residentSubmissionValidation.js';
 import { saveIssue } from './lib/saveIssue.js';
 import { Camera, MapPin, Send, CheckCircle, Sparkles, ArrowLeft, Ruler, ChevronRight } from 'lucide-react';
 
@@ -168,8 +169,9 @@ export default function ReportForm({ initialIssueType = 'ramp', onBackToDashboar
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!location) {
-      setSaveMessage({ ok: false, text: 'Please obtain GPS location or enter coordinates first.' });
+    const validationError = getResidentSubmissionError({ privacyAgreed, location });
+    if (validationError) {
+      setSaveMessage({ ok: false, text: validationError });
       return;
     }
 
@@ -259,7 +261,7 @@ export default function ReportForm({ initialIssueType = 'ramp', onBackToDashboar
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form noValidate onSubmit={handleSubmit} className="space-y-4">
             <div className="rounded-3xl bg-white p-5 shadow-xs border border-slate-200 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-black uppercase tracking-wider text-indigo-600">
@@ -329,7 +331,6 @@ export default function ReportForm({ initialIssueType = 'ramp', onBackToDashboar
                 <label className="flex items-start gap-3 rounded-2xl bg-slate-50 p-4 border border-slate-200 cursor-pointer hover:bg-slate-100/80 transition-colors">
                   <input
                     type="checkbox"
-                    required
                     checked={privacyAgreed}
                     onChange={(e) => setPrivacyAgreed(e.target.checked)}
                     className="mt-0.5 h-4 w-4 rounded-md accent-indigo-600 cursor-pointer"
