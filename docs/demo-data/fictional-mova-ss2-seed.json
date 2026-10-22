@@ -1,0 +1,164 @@
+{
+  "datasetLabel": "FICTIONAL DEMO DATA — NOT FOR LIVE INSERTION",
+  "purpose": "Review-only map, priority, queue, and workflow demonstrations for the SimeDarby_MOVA project.",
+  "area": "Approximate SS2, Petaling Jaya project area",
+  "disclaimer": "These are invented scenarios. They do not identify real people, properties, or actual accessibility defects.",
+  "target": {
+    "table": "public.\"MOVA\"",
+    "identityColumnOmitted": "id",
+    "movaColumnsUsed": [
+      "type",
+      "lat",
+      "lng",
+      "slope_deg",
+      "photo_url",
+      "status",
+      "severity",
+      "created_at"
+    ],
+    "notStoredInMova": [
+      "demoPriorityInputs.pedestrianTraffic",
+      "demoPriorityInputs.roadDanger",
+      "fictionalScenario"
+    ]
+  },
+  "records": [
+    {
+      "fictionalScenario": "Fictional obstruction scenario for enforcement-queue demonstration only.",
+      "movaRecord": {
+        "type": "blocked_tactile_paving",
+        "lat": 3.11792,
+        "lng": 101.62075,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "reported",
+        "severity": "5",
+        "created_at": "2026-10-02T09:15:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 5,
+        "roadDanger": 3
+      }
+    },
+    {
+      "fictionalScenario": "Fictional ramp repair scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "ramp",
+        "lat": 3.11908,
+        "lng": 101.61991,
+        "slope_deg": 7.8,
+        "photo_url": null,
+        "status": "assigned",
+        "severity": "4",
+        "created_at": "2026-10-07T14:20:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 4,
+        "roadDanger": 4
+      }
+    },
+    {
+      "fictionalScenario": "Fictional damaged tactile surface scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "broken_tactile_paving",
+        "lat": 3.1201,
+        "lng": 101.62152,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "reported",
+        "severity": "3",
+        "created_at": "2026-10-16T08:40:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 4,
+        "roadDanger": 1
+      }
+    },
+    {
+      "fictionalScenario": "Fictional handrail repair scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "missing_handrail",
+        "lat": 3.11685,
+        "lng": 101.62205,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "assigned",
+        "severity": "4",
+        "created_at": "2026-10-12T11:05:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 3,
+        "roadDanger": 3
+      }
+    },
+    {
+      "fictionalScenario": "Fictional entrance-level change scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "step_at_entrance",
+        "lat": 3.11866,
+        "lng": 101.6231,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "reported",
+        "severity": "3",
+        "created_at": "2026-10-20T16:30:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 2,
+        "roadDanger": 0
+      }
+    },
+    {
+      "fictionalScenario": "Fictional lift maintenance scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "lift_out_of_service",
+        "lat": 3.11592,
+        "lng": 101.6211,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "fixed",
+        "severity": "5",
+        "created_at": "2026-09-28T07:50:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 5,
+        "roadDanger": 2
+      },
+      "workflowNote": "Demo display state only. Do not use as a live workflow record until status-event history is approved."
+    },
+    {
+      "fictionalScenario": "Fictional crossing-surface scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "drain_or_crossing",
+        "lat": 3.12104,
+        "lng": 101.61894,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "reported",
+        "severity": "4",
+        "created_at": "2026-10-10T18:10:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 4,
+        "roadDanger": 5
+      }
+    },
+    {
+      "fictionalScenario": "Fictional drop-off access scenario for maintenance-queue demonstration only.",
+      "movaRecord": {
+        "type": "pickup_point",
+        "lat": 3.1172,
+        "lng": 101.6186,
+        "slope_deg": null,
+        "photo_url": null,
+        "status": "reported",
+        "severity": "5",
+        "created_at": "2026-10-05T12:25:00+08:00"
+      },
+      "demoPriorityInputs": {
+        "pedestrianTraffic": 5,
+        "roadDanger": 5
+      }
+    }
+  ]
+}
